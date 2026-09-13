@@ -10,6 +10,13 @@
 #include "dolphin/vm/VM.h"
 #include "dolphin/vi/vifuncs.h"
 
+#if defined(__ANDROID__)
+// Bionic provides malloc, but the decomp's legacy C/MSL compatibility headers
+// can leave the global declaration hidden in C++ translation units. Keep the
+// workaround local to Android rather than changing the desktop header model.
+extern "C" void* malloc(size_t);
+#endif
+
 static u8 s_MemoryInitialized = 0;
 
 MemoryAllocator StandardAllocator;
