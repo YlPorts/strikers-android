@@ -1,6 +1,15 @@
 #ifndef MSL_UTILITY_H_
 #define MSL_UTILITY_H_
 
+// Android's libc++ places its standard library implementation in an inline
+// ABI namespace (std::__ndk1). Several NDK headers forward-declare std::pair
+// there before the legacy Metrowerks support headers are parsed. Defining a
+// second std::pair in the outer std namespace then makes every pair reference
+// ambiguous. Use libc++'s pair on Android while retaining the original MSL
+// implementation on desktop builds.
+#if defined(__ANDROID__)
+#include <utility>
+#else
 namespace std
 {
 template <class T1, class T2>
@@ -21,6 +30,7 @@ struct pair
     }
 };
 } // namespace std
+#endif
 
 namespace Metrowerks
 {
