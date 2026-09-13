@@ -68,7 +68,8 @@ android {
                     "-DAURORA_SDL3_PROVIDER=vendor",
                     "-DAURORA_SDL3_LINKAGE=shared",
                     "-DAURORA_DAWN_PROVIDER=package",
-                    "-DAURORA_DAWN_LINKAGE=static"
+                    "-DAURORA_DAWN_LINKAGE=static",
+                    "-DAURORA_CACHE_USE_ZSTD=OFF"
                 )
                 cppFlags += listOf("-std=c++20")
             }
