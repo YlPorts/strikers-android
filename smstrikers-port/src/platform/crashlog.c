@@ -12,14 +12,16 @@
 
 #if !defined(_WIN32)
 
-#include <execinfo.h>
 #include <unistd.h>
+#if !defined(__ANDROID__)
+#include <execinfo.h>
+#endif
 
 static void crash_handler(int sig)
 {
-    // Async-signal-safe only: backtrace_symbols() mallocs, so raw addresses go out and atos
-    // resolves them.
-    const char* name = "signal";
+    // Async-signal-safe only. Android's NDK does not expose the desktop execinfo backtrace API, so
+    // on Android log the fatal signal and let logcat/tombstones provide the native unwind.
+    const char* name = "signal\n";
     switch (sig)
     {
     case SIGSEGV: name = "SIGSEGV (bad memory access)\n"; break;
@@ -32,9 +34,11 @@ static void crash_handler(int sig)
     write(2, "\n*** strikers: ", 15);
     write(2, name, strlen(name));
 
+#if !defined(__ANDROID__)
     void* frames[64];
     int n = backtrace(frames, 64);
     backtrace_symbols_fd(frames, n, 2);
+#endif
 
     signal(sig, SIG_DFL);
     raise(sig);

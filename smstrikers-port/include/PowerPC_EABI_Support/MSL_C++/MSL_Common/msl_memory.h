@@ -1,6 +1,13 @@
 #ifndef MSL_MEMORY_H_
 #define MSL_MEMORY_H_
 
+// Android builds use libc++, which already provides allocator and the
+// uninitialized memory algorithms in std. Re-declaring the Metrowerks
+// versions in the outer std namespace conflicts with libc++'s inline ABI
+// namespace (std::__ndk1). Keep the original MSL shims for non-Android builds.
+#if defined(__ANDROID__)
+#include <memory>
+#else
 namespace std
 {
 
@@ -65,5 +72,6 @@ inline T* uninitialized_copy(T* first, T* last, T* result)
 }
 
 } // namespace std
+#endif
 
 #endif

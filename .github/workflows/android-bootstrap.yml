@@ -1,0 +1,71 @@
+name: Android bootstrap
+
+on:
+  push:
+    branches:
+      - android-port-bootstrap
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'smstrikers-port/**'
+      - '.github/workflows/android-bootstrap.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.31.1'
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle :app:assembleDebug --stacktrace --info --console=plain 2>&1 | tee build.log
+
+      - name: Show build failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo '===== Strikers Android build diagnostics ====='
+          grep -n -E 'CMake Error|FAILED:|fatal error:|error:|ninja:|Execution failed|What went wrong|Caused by:' build.log | tail -n 250 || true
+          echo '===== Tail of complete build log ====='
+          tail -n 300 build.log || true
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strikers-android-build-log
+          path: android/build.log
+          if-no-files-found: ignore
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strikers-android-arm64-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
