@@ -41,6 +41,10 @@ foreach(_target strikers_game strikers_ode strikers_sdk strikers_platform strike
 endforeach()
 target_compile_definitions(strikers_musyx PRIVATE STRIKERS_ANDROID=1 TARGET_ANDROID=1)
 
+# The legacy ODE collision source uses the C malloc symbol without including stdlib.h. Desktop
+# libc headers happened to expose it transitively; Android NDK/Clang correctly does not.
+target_compile_options(strikers_ode PRIVATE "-include" "stdlib.h")
+
 target_link_libraries(main PRIVATE
     port_flags
     aurora::core
