@@ -41,9 +41,9 @@ foreach(_target strikers_game strikers_ode strikers_sdk strikers_platform strike
 endforeach()
 target_compile_definitions(strikers_musyx PRIVATE STRIKERS_ANDROID=1 TARGET_ANDROID=1)
 
-# The legacy ODE collision source uses the C malloc symbol without including stdlib.h. Keep this
-# as one Clang option so CMake does not de-duplicate the separate -include already used for prelude.h.
-target_compile_options(strikers_ode PRIVATE "-include=stdlib.h")
+# The legacy ODE collision source uses the C malloc symbol without including stdlib.h. SHELL keeps
+# this forced include grouped so CMake does not de-duplicate the separate prelude.h -include pair.
+target_compile_options(strikers_ode PRIVATE "SHELL:-include stdlib.h")
 
 target_link_libraries(main PRIVATE
     port_flags
