@@ -1,13 +1,16 @@
 package dev.ylports.strikers
 
-import android.app.Activity
+import android.content.Context
 import android.os.Bundle
-import android.view.Gravity
 import android.view.View
-import android.widget.TextView
+import dev.encounter.aurora.AuroraSurface
+import org.libsdl.app.SDLActivity
+import org.libsdl.app.SDLSurface
 
-class MainActivity : Activity() {
-    external fun nativeStatus(): String
+class MainActivity : SDLActivity() {
+    override fun createSDLSurface(context: Context): SDLSurface {
+        return AuroraSurface(context)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -20,18 +23,10 @@ class MainActivity : Activity() {
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE
             )
-
-        val status = TextView(this).apply {
-            gravity = Gravity.CENTER
-            textSize = 18f
-            text = nativeStatus()
-        }
-        setContentView(status)
     }
 
-    companion object {
-        init {
-            System.loadLibrary("strikers_android")
-        }
+    override fun getLibraries(): Array<String> {
+        // SDLActivity loads these in order, then invokes SDL_main from libmain.so.
+        return arrayOf("SDL3", "main")
     }
 }
