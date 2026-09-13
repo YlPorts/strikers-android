@@ -1,7 +1,15 @@
 #ifndef PORT_MSL_MALLOC_H
 #define PORT_MSL_MALLOC_H
-// Port shim for MSL's <malloc.h>: malloc and friends come from <stdlib.h> and src/platform/msl_arena.cpp implements the arena helpers.
+// Port shim for MSL's <malloc.h>. Android/Bionic's <stdlib.h> itself includes
+// <malloc.h>; because this shim is ahead of the NDK sysroot on the include path,
+// including <stdlib.h> here recursively hides Bionic's malloc/calloc/free
+// declarations. Skip to the next malloc.h on Android so Bionic can expose its
+// real heap API, while preserving the original host behavior elsewhere.
+#if defined(__ANDROID__)
+#include_next <malloc.h>
+#else
 #include <stdlib.h>
+#endif
 #include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
