@@ -6,6 +6,12 @@
 #include "dolphin/ai.h"
 #include "dolphin/types.h"
 
+#if defined(__ANDROID__)
+// Bionic exports calloc normally, but the legacy decomp/MSL include environment
+// can hide the global allocator declarations. Keep this host shim explicit on Android.
+extern void* calloc(size_t count, size_t size);
+#endif
+
 // ARAM ARInit hands the library a stack of chunk addresses; the game then calls ARAlloc to carve
 // the space up.
 
