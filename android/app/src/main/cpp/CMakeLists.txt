@@ -41,11 +41,11 @@ foreach(_target strikers_game strikers_ode strikers_sdk strikers_platform strike
 endforeach()
 target_compile_definitions(strikers_musyx PRIVATE STRIKERS_ANDROID=1 TARGET_ANDROID=1)
 
-# collision_space.cpp is legacy ODE code that calls malloc without declaring it. Forcing Android's
-# full stdlib.h before the port prelude conflicts with the bundled MSL headers, so expose only the
-# missing ABI-compatible declaration to the ODE target.
+# Legacy ODE allocation code relies on C runtime declarations leaking in transitively on desktop.
+# Forcing Android's full stdlib.h before the port prelude conflicts with bundled MSL headers, so
+# expose only the ABI-compatible allocation declarations that ODE actually needs.
 set(_ode_android_compat "${CMAKE_CURRENT_BINARY_DIR}/ode-android-compat.h")
-file(WRITE "${_ode_android_compat}" "#pragma once\n#ifdef __cplusplus\nextern \"C\" void* malloc(__SIZE_TYPE__);\n#else\nvoid* malloc(__SIZE_TYPE__);\n#endif\n")
+file(WRITE "${_ode_android_compat}" "#pragma once\n#ifdef __cplusplus\nextern \"C\" {\n#endif\nvoid* malloc(__SIZE_TYPE__);\nvoid* realloc(void*, __SIZE_TYPE__);\nvoid free(void*);\n#ifdef __cplusplus\n}\n#endif\n")
 target_compile_options(strikers_ode PRIVATE "SHELL:-include ${_ode_android_compat}")
 
 target_link_libraries(main PRIVATE
