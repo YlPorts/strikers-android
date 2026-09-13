@@ -5,6 +5,10 @@ plugins {
     kotlin("android")
 }
 
+kotlin {
+    jvmToolchain(17)
+}
+
 val sdlVersion = "3.4.10"
 val generatedSDLJava = layout.buildDirectory.dir("generated/sdl-java")
 val sdlArchive = layout.buildDirectory.file("downloads/SDL-$sdlVersion.tar.gz")
@@ -69,6 +73,11 @@ android {
                 cppFlags += listOf("-std=c++20")
             }
         }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     buildTypes {
