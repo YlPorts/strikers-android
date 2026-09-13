@@ -10,6 +10,11 @@
 namespace std
 {
 
+// Android's libc++ exposes binary_function and less through its inline ABI
+// namespace. Re-declaring the Metrowerks versions in the outer std namespace
+// makes unqualified references ambiguous. Keep the legacy declarations only
+// for non-Android builds.
+#if !defined(__ANDROID__)
 template <class Arg1, class Arg2, class Result>
 struct binary_function
 {
@@ -21,6 +26,7 @@ template <class T>
 struct less : public binary_function<T, T, bool>
 {
 };
+#endif
 #endif
 
 template <int N>
