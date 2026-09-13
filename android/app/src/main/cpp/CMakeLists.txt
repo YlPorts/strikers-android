@@ -41,9 +41,12 @@ foreach(_target strikers_game strikers_ode strikers_sdk strikers_platform strike
 endforeach()
 target_compile_definitions(strikers_musyx PRIVATE STRIKERS_ANDROID=1 TARGET_ANDROID=1)
 
-# The legacy ODE collision source uses the C malloc symbol without including stdlib.h. SHELL keeps
-# this forced include grouped so CMake does not de-duplicate the separate prelude.h -include pair.
-target_compile_options(strikers_ode PRIVATE "SHELL:-include stdlib.h")
+# collision_space.cpp is legacy ODE code that calls malloc without declaring it. Forcing Android's
+# full stdlib.h before the port prelude conflicts with the bundled MSL headers, so expose only the
+# missing ABI-compatible declaration to the ODE target.
+set(_ode_android_compat "${CMAKE_CURRENT_BINARY_DIR}/ode-android-compat.h")
+file(WRITE "${_ode_android_compat}" "#pragma once\n#ifdef __cplusplus\nextern \"C\" void* malloc(__SIZE_TYPE__);\n#else\nvoid* malloc(__SIZE_TYPE__);\n#endif\n")
+target_compile_options(strikers_ode PRIVATE "SHELL:-include ${_ode_android_compat}")
 
 target_link_libraries(main PRIVATE
     port_flags
