@@ -4,73 +4,66 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
-import android.os.ParcelFileDescriptor;
-import android.system.Os;
-import android.system.OsConstants;
 import android.view.Gravity;
 import android.view.View;
-import android.view.Window;
-import android.view.WindowInsets;
-import android.view.WindowInsetsController;
-import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.IOException;
-
+/**
+ * Deliberately tiny Java-only launcher.
+ *
+ * Keep this activity free of SDL, Aurora and native-library references so a native
+ * loader failure can never prevent the launcher from opening. The actual game is
+ * started in the private :game process by GameBootstrapActivity.
+ */
 public final class MainActivity extends Activity {
     private static final int PICK_GAME_IMAGE = 1001;
     private static final String PREFS = "strikers_android";
     private static final String PREF_GAME_URI = "game_image_uri";
-
-    // Keep the SAF descriptor alive while Strikers is running. The native port opens
-    // /proc/self/fd/N as a normal seekable disc image, avoiding a 1.4 GB copy.
-    private static ParcelFileDescriptor gameImageFd;
 
     private TextView statusView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        enterImmersiveMode();
         setContentView(buildLauncherView());
-    }
-
-    @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-        super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
-            enterImmersiveMode();
-        }
     }
 
     private View buildLauncherView() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
-        root.setPadding(dp(32), dp(24), dp(32), dp(24));
+        root.setPadding(dp(28), dp(24), dp(28), dp(24));
         root.setBackgroundColor(Color.rgb(13, 15, 19));
 
         TextView title = new TextView(this);
         title.setText("STRIKERS ANDROID");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(28f);
+        title.setTextSize(27f);
         title.setGravity(Gravity.CENTER);
         root.addView(title, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        TextView subtitle = new TextView(this);
+        subtitle.setText("Native ARM64 · SDL3 / Aurora");
+        subtitle.setTextColor(Color.rgb(145, 155, 170));
+        subtitle.setTextSize(13f);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setPadding(0, dp(8), 0, dp(18));
+        root.addView(subtitle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
         statusView = new TextView(this);
-        statusView.setTextColor(Color.rgb(190, 198, 210));
+        statusView.setTextColor(Color.rgb(205, 210, 220));
         statusView.setTextSize(15f);
         statusView.setGravity(Gravity.CENTER);
-        statusView.setPadding(0, dp(14), 0, dp(24));
-        statusView.setText(initialStatus());
+        statusView.setPadding(0, 0, 0, dp(22));
+        updateStatus();
         root.addView(statusView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -79,28 +72,22 @@ public final class MainActivity extends Activity {
         chooseGame.setText("Seleccionar ISO / GCM / CISO / GCZ");
         chooseGame.setAllCaps(false);
         chooseGame.setOnClickListener(v -> chooseGameImage());
-
-        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
-                Math.min(dp(440), getResources().getDisplayMetrics().widthPixels - dp(64)),
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        root.addView(chooseGame, buttonParams);
+        root.addView(chooseGame, buttonParams());
 
         Button playGame = new Button(this);
         playGame.setText("Jugar");
         playGame.setAllCaps(false);
         playGame.setOnClickListener(v -> launchGame());
-        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(
-                Math.min(dp(440), getResources().getDisplayMetrics().widthPixels - dp(64)),
-                LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams playParams = buttonParams();
         playParams.topMargin = dp(12);
         root.addView(playGame, playParams);
 
         TextView note = new TextView(this);
-        note.setText("Build de desarrollo: núcleo completo + SDL3/Aurora. La imagen se usa directamente desde Android sin copiarla al almacenamiento interno.");
-        note.setTextColor(Color.rgb(130, 138, 150));
+        note.setText("El launcher está aislado del proceso del juego para que un fallo nativo no cierre la app completa.");
+        note.setTextColor(Color.rgb(125, 135, 150));
         note.setTextSize(12f);
         note.setGravity(Gravity.CENTER);
-        note.setPadding(0, dp(20), 0, 0);
+        note.setPadding(0, dp(18), 0, 0);
         root.addView(note, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -108,12 +95,17 @@ public final class MainActivity extends Activity {
         return root;
     }
 
-    private String initialStatus() {
+    private LinearLayout.LayoutParams buttonParams() {
+        int width = getResources().getDisplayMetrics().widthPixels - dp(56);
+        width = Math.max(dp(220), Math.min(dp(440), width));
+        return new LinearLayout.LayoutParams(width, LinearLayout.LayoutParams.WRAP_CONTENT);
+    }
+
+    private void updateStatus() {
         String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_GAME_URI, null);
-        if (saved == null) {
-            return "Núcleo ARM64 listo · SDL/Aurora conectado\nImagen del juego: sin seleccionar";
-        }
-        return "Núcleo ARM64 listo · SDL/Aurora conectado\nImagen del juego: seleccionada";
+        statusView.setText(saved == null
+                ? "Launcher listo\nImagen del juego: sin seleccionar"
+                : "Launcher listo\nImagen del juego: seleccionada");
     }
 
     private void chooseGameImage() {
@@ -142,15 +134,14 @@ public final class MainActivity extends Activity {
         try {
             getContentResolver().takePersistableUriPermission(image, takeFlags);
         } catch (SecurityException ignored) {
-            // Some document providers keep the descriptor usable for this process but
-            // do not implement persistable grants.
+            // The one-shot grant is still forwarded to the private game activity.
         }
 
         getSharedPreferences(PREFS, MODE_PRIVATE)
                 .edit()
                 .putString(PREF_GAME_URI, image.toString())
                 .apply();
-        statusView.setText("Núcleo ARM64 listo · SDL/Aurora conectado\nImagen del juego: seleccionada");
+        updateStatus();
     }
 
     private void launchGame() {
@@ -160,64 +151,15 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        Intent game = new Intent();
+        game.setClassName(getPackageName(), getPackageName() + ".GameBootstrapActivity");
+        game.putExtra(GameBootstrapActivity.EXTRA_GAME_URI, saved);
+        game.setData(Uri.parse(saved));
+        game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
-            closeGameImageFd();
-            gameImageFd = getContentResolver().openFileDescriptor(Uri.parse(saved), "r");
-            if (gameImageFd == null) {
-                throw new IOException("Android no devolvió un descriptor para la imagen");
-            }
-
-            // The disc reader needs random access. Local files and normal document
-            // providers are seekable; some cloud providers expose a one-way pipe.
-            // Detect that here instead of letting the native reader fail later.
-            Os.lseek(gameImageFd.getFileDescriptor(), 0, OsConstants.SEEK_SET);
-
-            String nativePath = "/proc/self/fd/" + gameImageFd.getFd();
-            Os.setenv("STRIKERS_DATA", nativePath, true);
-            Os.setenv("STRIKERS_FULLSCREEN", "1", true);
-
-            statusView.setText("Iniciando SDL/Aurora…");
-            startActivity(new Intent(this, StrikersActivity.class));
+            startActivity(game);
         } catch (Exception e) {
-            closeGameImageFd();
-            statusView.setText("No se pudo abrir la imagen del juego\n" + e.getClass().getSimpleName());
-            Toast.makeText(
-                    this,
-                    "No se pudo usar esa imagen. Si está en la nube, guárdala primero en el teléfono.",
-                    Toast.LENGTH_LONG)
-                    .show();
-        }
-    }
-
-    private static void closeGameImageFd() {
-        if (gameImageFd == null) {
-            return;
-        }
-        try {
-            gameImageFd.close();
-        } catch (IOException ignored) {
-        }
-        gameImageFd = null;
-    }
-
-    private void enterImmersiveMode() {
-        Window window = getWindow();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false);
-            WindowInsetsController controller = window.getInsetsController();
-            if (controller != null) {
-                controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                controller.setSystemBarsBehavior(
-                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-            }
-        } else {
-            window.getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                            | View.SYSTEM_UI_FLAG_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            Toast.makeText(this, "No se pudo iniciar el proceso del juego: " + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
         }
     }
 
