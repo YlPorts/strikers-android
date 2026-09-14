@@ -16,10 +16,10 @@ set(AURORA_DAWN_LINKAGE static CACHE STRING "" FORCE)
 set(STRIKERS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../smstrikers-port")
 add_subdirectory("${STRIKERS_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/strikers-core" EXCLUDE_FROM_ALL)
 
-# Aurora needs SDL's real Android activity mutex while presenting. Those helpers
-# are private/hidden in a shared SDL build, so compile a tiny forwarding API into
-# SDL3 and explicitly keep/export only those two bridge symbols. The -u flags make
-# them GC roots and --export-dynamic-symbol places them in libSDL3.so's dynsym.
+# SDLActivity owns JNI_OnLoad on Android. Aurora still needs SDL's private
+# Android activity-mutex helpers while presenting, so expose only a tiny bridge
+# from the shared SDL3 library. The game itself is linked against SDL3-shared
+# below, which resolves both SDL's public API and these bridge entry points.
 if(TARGET SDL3-shared)
     target_sources(SDL3-shared PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/sdl_activity_mutex_bridge.c"
@@ -30,6 +30,8 @@ if(TARGET SDL3-shared)
         -Wl,--export-dynamic-symbol=SDL_StrikersLockActivityMutex
         -Wl,--export-dynamic-symbol=SDL_StrikersUnlockActivityMutex
     )
+else()
+    message(FATAL_ERROR "Android port requires the vendored SDL3-shared target")
 endif()
 
 target_compile_definitions(strikers_game PRIVATE NDEBUG=1)
@@ -64,6 +66,7 @@ target_link_libraries(strikers_android PRIVATE
     aurora::si
     aurora::card
     aurora::main
+    SDL3-shared
 )
 
 if(TARGET ZLIB::ZLIB)
