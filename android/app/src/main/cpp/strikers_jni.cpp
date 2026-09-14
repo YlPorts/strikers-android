@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <strings.h>
+#include <unistd.h>
 
 #include "port/disc.h"
 
@@ -150,11 +151,15 @@ Java_com_ylports_strikers_GameBootstrapActivity_nativeBeginRunLog(
         return;
     }
 
-    FILE* redirected = freopen(path.c_str(), "w", stderr);
+    // Append instead of truncating: Java has already written durable markers for
+    // every step before SDL is entered. Keep stderr completely unbuffered so a
+    // native abort cannot strand the last useful line in stdio buffers.
+    FILE* redirected = freopen(path.c_str(), "a", stderr);
     if (redirected != nullptr) {
-        setvbuf(stderr, nullptr, _IOLBF, 0);
-        fprintf(stderr, "[android] Strikers native run log started\n");
+        setvbuf(stderr, nullptr, _IONBF, 0);
+        fprintf(stderr, "[android] native stderr attached; entering SDL next\n");
         fflush(stderr);
+        fsync(fileno(stderr));
     } else {
         __android_log_print(
                 ANDROID_LOG_ERROR,
