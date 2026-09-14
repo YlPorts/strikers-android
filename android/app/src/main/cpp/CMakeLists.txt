@@ -1,14 +1,19 @@
 cmake_minimum_required(VERSION 3.24)
-project(strikers_android_bootstrap LANGUAGES C CXX)
+project(strikers_android_app LANGUAGES C CXX)
 
-add_library(strikers_android SHARED
-    strikers_jni.cpp
+# Build the exact full native library that is validated by android-full-link.
+# Keeping this as an add_subdirectory means the APK and the standalone linker
+# workflow cannot silently drift onto different source sets.
+set(STRIKERS_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../..")
+add_subdirectory(
+    "${STRIKERS_REPO_ROOT}/cmake/android"
+    "${CMAKE_CURRENT_BINARY_DIR}/strikers-full"
 )
 
-set_target_properties(strikers_android PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-    CXX_EXTENSIONS OFF
+# The Android launcher/JNI bridge belongs to the same shared object as the game.
+# cmake/android names the resulting library libstrikers.so.
+target_sources(strikers_android PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/strikers_jni.cpp"
 )
 
 target_compile_definitions(strikers_android PRIVATE
