@@ -43,6 +43,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 
 // MSL declares va_list as `typedef __va_list_struct __va_list[1]`, and headers in the tree spell
