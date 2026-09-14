@@ -3,16 +3,18 @@ project(strikers_android C CXX)
 
 # Keep the Android link experiment isolated from the desktop executable target. The
 # Strikers subproject still owns all source lists/compile flags; this wrapper only
-# repackages its already-portable object libraries as an Android .so.
+# repackages its already-portable object libraries as Android shared libraries.
 set(STRIKERS_AURORA ON CACHE BOOL "" FORCE)
 set(STRIKERS_FFMPEG OFF CACHE BOOL "" FORCE)
 set(STRIKERS_ASAN OFF CACHE BOOL "" FORCE)
 
-# These settings are the Android Aurora combination already proven by the Aurora
-# probe workflow.
+# Android SDLActivity expects SDL's JNI runtime to live in libSDL3.so and to be
+# loaded before the game's shared object.  Do not fold SDL3's JNI_OnLoad into the
+# very large libstrikers.so: keep SDL3 shared while Aurora/Dawn remain otherwise
+# identical to the native port configuration.
 set(AURORA_CACHE_USE_ZSTD OFF CACHE BOOL "" FORCE)
 set(AURORA_SDL3_PROVIDER vendor CACHE STRING "" FORCE)
-set(AURORA_SDL3_LINKAGE static CACHE STRING "" FORCE)
+set(AURORA_SDL3_LINKAGE shared CACHE STRING "" FORCE)
 set(AURORA_DAWN_PROVIDER package CACHE STRING "" FORCE)
 set(AURORA_DAWN_LINKAGE static CACHE STRING "" FORCE)
 
@@ -66,16 +68,16 @@ if(TARGET ZLIB::ZLIB)
     target_link_libraries(strikers_android PRIVATE ZLIB::ZLIB)
 endif()
 
-# aurora::main is a static archive. Android's SDLActivity resolves SDL_main with
-# dlsym at runtime, so there is otherwise no link-time reference that would pull
-# main.cpp out of that archive. Force that single public entry point into the .so.
+# aurora::main is a static archive. SDLActivity resolves SDL_main with dlsym from
+# libstrikers.so at runtime, so there is otherwise no link-time reference that would
+# pull main.cpp out of that archive. Force that single public entry point into the .so.
 target_link_options(strikers_android PRIVATE
     -Wl,-u,SDL_main
     -Wl,--gc-sections
     -Wl,-z,noexecstack
 )
 
-# JNI/SDL will load this exact soname from the APK.
+# JNI/SDL will load this exact game soname after libSDL3.so.
 set_target_properties(strikers_android PROPERTIES
     LIBRARY_OUTPUT_NAME "strikers"
 )
