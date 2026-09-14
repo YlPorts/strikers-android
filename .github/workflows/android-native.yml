@@ -41,7 +41,7 @@ jobs:
           sdkmanager --install \
             "ndk;${NDK_VERSION}" \
             "cmake;${CMAKE_VERSION}" \
-            'platforms;android-37' \
+            'platforms;android-36' \
             'build-tools;36.0.0' \
             'platform-tools'
 
@@ -78,7 +78,7 @@ jobs:
           sdkmanager --install \
             "ndk;${NDK_VERSION}" \
             "cmake;${CMAKE_VERSION}" \
-            'platforms;android-37' \
+            'platforms;android-36' \
             'platform-tools'
 
       - name: Configure native sources for Android
