@@ -1,0 +1,63 @@
+name: android-aurora-probe
+
+on:
+  push:
+    branches: [android-port]
+    paths:
+      - '.github/workflows/android-aurora-probe.yml'
+      - 'smstrikers-port/CMakeLists.txt'
+      - 'smstrikers-port/extern/aurora/**'
+  workflow_dispatch:
+
+env:
+  NDK_VERSION: '28.2.13676358'
+  CMAKE_VERSION: '3.31.1'
+
+jobs:
+  aurora-android:
+    name: Aurora Android backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install NDK and CMake
+        shell: bash
+        run: |
+          sdkmanager --install \
+            "ndk;${NDK_VERSION}" \
+            "cmake;${CMAKE_VERSION}" \
+            'platforms;android-36'
+
+      - name: Configure Strikers with Aurora Android
+        working-directory: smstrikers-port
+        shell: bash
+        run: |
+          cmake -S . -B build-android-aurora -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/${NDK_VERSION}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DSTRIKERS_AURORA=ON \
+            -DSTRIKERS_FFMPEG=OFF \
+            -DSTRIKERS_ASAN=OFF \
+            -DAURORA_SDL3_PROVIDER=vendor \
+            -DAURORA_SDL3_LINKAGE=static \
+            -DAURORA_DAWN_PROVIDER=package \
+            -DAURORA_DAWN_LINKAGE=static
+
+      - name: Build Aurora Android application layer
+        working-directory: smstrikers-port
+        shell: bash
+        run: cmake --build build-android-aurora --target aurora_main --parallel 2
+
+      - name: Build Aurora GX renderer
+        working-directory: smstrikers-port
+        shell: bash
+        run: cmake --build build-android-aurora --target aurora_gx --parallel 2
