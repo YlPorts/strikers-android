@@ -88,18 +88,31 @@ public final class GameBootstrapActivity extends Activity {
             Os.setenv("STRIKERS_NO_MESSAGEBOX", "1", true);
             RunLog.append(this, "bootstrap: native environment exported before library load");
 
-            showPreparing("Verificando imagen de Super Mario Strikers…");
+            showPreparing("Cargando SDL3…");
+            try {
+                RunLog.append(this, "bootstrap: System.loadLibrary(SDL3) begin");
+                System.loadLibrary("SDL3");
+                RunLog.append(this, "bootstrap: System.loadLibrary(SDL3) OK");
+            } catch (UnsatisfiedLinkError e) {
+                RunLog.append(this, "bootstrap: SDL3 load failed: " + safeMessage(e));
+                closeGameImageFd();
+                showError("No se pudo cargar SDL3.\n\n" + safeMessage(e));
+                return;
+            }
+
+            showPreparing("Cargando núcleo de Super Mario Strikers…");
             try {
                 RunLog.append(this, "bootstrap: System.loadLibrary(strikers) begin");
                 System.loadLibrary("strikers");
                 RunLog.append(this, "bootstrap: System.loadLibrary(strikers) OK");
             } catch (UnsatisfiedLinkError e) {
-                RunLog.append(this, "bootstrap: native library load failed: " + safeMessage(e));
+                RunLog.append(this, "bootstrap: Strikers native library load failed: " + safeMessage(e));
                 closeGameImageFd();
                 showError("No se pudo cargar el núcleo nativo ARM64.\n\n" + safeMessage(e));
                 return;
             }
 
+            showPreparing("Verificando imagen de Super Mario Strikers…");
             RunLog.append(this, "bootstrap: validating disc with native reader");
             String validationError = nativeValidateDiscPath(nativePath);
             if (validationError != null && !validationError.isEmpty()) {
