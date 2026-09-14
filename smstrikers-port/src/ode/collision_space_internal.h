@@ -29,6 +29,13 @@ stuff common to all spaces
 #ifndef _ODE_COLLISION_SPACE_INTERNAL_H_
 #define _ODE_COLLISION_SPACE_INTERNAL_H_
 
+#if defined(__ANDROID__)
+// Bionic keeps the heap API in malloc.h as well as stdlib.h. Pull it in here
+// explicitly because this ODE translation unit calls malloc() directly and
+// the decomp's host header layering can hide that declaration on Android.
+#include <malloc.h>
+#endif
+
 #define ALLOCA(x) dALLOCA16(x)
 
 #define CHECK_NOT_LOCKED(space) \
