@@ -3,6 +3,30 @@
 
 namespace std
 {
+#if defined(__ANDROID__)
+// Android's libc++ exposes std::pair through its __ndk1 inline namespace.  The
+// original Metrowerks STL also provided a class named std::pair; keeping both
+// visible makes unqualified pair references ambiguous.  Keep the legacy
+// layout/behaviour under a private name on Android, while desktop ports retain
+// the original spelling below.
+template <class T1, class T2>
+struct msl_pair
+{
+    T1 first;
+    T2 second;
+
+    msl_pair()
+        : first(T1())
+    {
+        second = T2();
+    }
+    msl_pair(const T1& f, const T2& s)
+        : first(f)
+        , second(s)
+    {
+    }
+};
+#else
 template <class T1, class T2>
 struct pair
 {
@@ -20,6 +44,10 @@ struct pair
     {
     }
 };
+
+template <class T1, class T2>
+using msl_pair = pair<T1, T2>;
+#endif
 } // namespace std
 
 namespace Metrowerks
