@@ -31,7 +31,6 @@ public final class MainActivity extends Activity {
     private static final String PREF_GAME_URI = "game_image_uri";
 
     private TextView statusView;
-    private boolean gameLaunchPending;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -43,11 +42,10 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (statusView != null) {
+            // Always rebuild from disk. Android may recreate this Activity after the
+            // :game process dies, so an in-memory "launch pending" flag is unreliable.
             updateStatus();
-            if (gameLaunchPending) {
-                gameLaunchPending = false;
-                appendLastRunLog();
-            }
+            appendLastRunLog();
         }
     }
 
@@ -102,7 +100,7 @@ public final class MainActivity extends Activity {
         root.addView(playGame, playParams);
 
         TextView note = new TextView(this);
-        note.setText("Si el proceso del juego vuelve a cerrarse, aquí aparecerán las últimas líneas del arranque nativo.");
+        note.setText("El último rastro de arranque se lee siempre desde disco, incluso si Android recrea el launcher.");
         note.setTextColor(Color.rgb(125, 135, 150));
         note.setTextSize(12f);
         note.setGravity(Gravity.CENTER);
@@ -128,8 +126,9 @@ public final class MainActivity extends Activity {
     }
 
     private void appendLastRunLog() {
-        File log = new File(getFilesDir(), GameBootstrapActivity.LAST_RUN_LOG);
+        File log = RunLog.file(this);
         if (!log.isFile() || log.length() == 0) {
+            statusView.append("\n\nÚltimo arranque: todavía no hay rastro guardado.");
             return;
         }
 
@@ -137,7 +136,7 @@ public final class MainActivity extends Activity {
         try (BufferedReader reader = new BufferedReader(new FileReader(log))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (tail.size() == 14) {
+                if (tail.size() == 20) {
                     tail.removeFirst();
                 }
                 tail.addLast(line);
@@ -147,11 +146,7 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        if (tail.isEmpty()) {
-            return;
-        }
-
-        StringBuilder text = new StringBuilder("\n\nÚltimo arranque nativo:\n");
+        StringBuilder text = new StringBuilder("\n\nÚltimo arranque:\n");
         for (String line : tail) {
             text.append(line).append('\n');
         }
@@ -201,10 +196,7 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        File oldLog = new File(getFilesDir(), GameBootstrapActivity.LAST_RUN_LOG);
-        if (oldLog.exists()) {
-            oldLog.delete();
-        }
+        RunLog.reset(this, "launcher: Jugar pulsado; iniciando GameBootstrapActivity");
 
         Intent game = new Intent();
         game.setClassName(getPackageName(), getPackageName() + ".GameBootstrapActivity");
@@ -212,10 +204,9 @@ public final class MainActivity extends Activity {
         game.setData(Uri.parse(saved));
         game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
-            gameLaunchPending = true;
             startActivity(game);
         } catch (Exception e) {
-            gameLaunchPending = false;
+            RunLog.append(this, "launcher: startActivity falló: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             Toast.makeText(this, "No se pudo iniciar el proceso del juego: " + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
         }
     }
