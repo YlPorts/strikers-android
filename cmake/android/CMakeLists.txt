@@ -27,6 +27,7 @@ target_sources(strikers_ode PRIVATE "${STRIKERS_ROOT}/src/ode/lcp.cpp")
 add_library(strikers_android SHARED
     android_link_anchor.c
     gx_efb_shim.cpp
+    stats_gatherer_shim.cpp
 )
 set_target_properties(strikers_android PROPERTIES OUTPUT_NAME "strikers")
 
