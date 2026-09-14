@@ -1,10 +1,7 @@
 #include "NL/nlMemory.h"
 #include <stdlib.h>
 #if defined(__ANDROID__)
-// Bionic keeps the allocator declarations in <malloc.h> as well. Pull it in
-// explicitly because this translation unit defines the global operator new and
-// must call the host allocator rather than recursing through nlMalloc.
-#include <malloc.h>
+#include <cstdlib>
 #endif
 #include "NL/MemAlloc.h"
 
@@ -66,7 +63,11 @@ void* nlMalloc(size_t size)
 void* operator new(size_t size)
 {
     // PORT: the host heap, not nlMalloc, see the note in tools/vendor.py.
+#if defined(__ANDROID__)
+    void* p = std::malloc(size ? size : 1);
+#else
     void* p = malloc(size ? size : 1);
+#endif
     if (p == NULL)
     {
         OSReport("nlMemory: out of memory allocating %lu bytes\n", size);
