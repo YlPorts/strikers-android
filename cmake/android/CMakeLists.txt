@@ -19,6 +19,12 @@ set(AURORA_DAWN_LINKAGE static CACHE STRING "" FORCE)
 set(STRIKERS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../smstrikers-port")
 add_subdirectory("${STRIKERS_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/strikers-core" EXCLUDE_FROM_ALL)
 
+# Android debug APKs are used for packaging/logcat, not the original game's fuzzy
+# debugger. Several decompilation-only debugger methods are intentionally absent;
+# compiling retail-style assertions out keeps the Android core on the same code path
+# as the already-proven Release full-link build.
+target_compile_definitions(strikers_game PRIVATE NDEBUG=1)
+
 # The retail build took these ODE pieces from the prebuilt ODE library, so they are
 # not in build-sources.txt. Android links the game as one shared object and needs the
 # real solver plus its stopwatch implementation rather than the generated stubs.
