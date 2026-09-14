@@ -46,8 +46,8 @@ android {
         applicationId = "com.ylports.strikers"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.2.0-sdl-dev"
+        versionCode = 2
+        versionName = "0.2.1-sdl-shared-test"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
