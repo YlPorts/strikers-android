@@ -9,7 +9,7 @@ set(STRIKERS_FFMPEG OFF CACHE BOOL "" FORCE)
 set(STRIKERS_ASAN OFF CACHE BOOL "" FORCE)
 
 # Android SDLActivity expects SDL's JNI runtime to live in libSDL3.so and to be
-# loaded before the game's shared object.  Do not fold SDL3's JNI_OnLoad into the
+# loaded before the game's shared object. Do not fold SDL3's JNI_OnLoad into the
 # very large libstrikers.so: keep SDL3 shared while Aurora/Dawn remain otherwise
 # identical to the native port configuration.
 set(AURORA_CACHE_USE_ZSTD OFF CACHE BOOL "" FORCE)
@@ -20,6 +20,16 @@ set(AURORA_DAWN_LINKAGE static CACHE STRING "" FORCE)
 
 set(STRIKERS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../smstrikers-port")
 add_subdirectory("${STRIKERS_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/strikers-core" EXCLUDE_FROM_ALL)
+
+# SDL's Android activity mutex helpers are internal and therefore hidden from a
+# shared libSDL3.so. Put a tiny public forwarding bridge inside SDL3 itself; the
+# game-side shim below keeps Aurora using SDL's *real* activity mutex rather than a
+# second unrelated mutex.
+if(TARGET SDL3-shared)
+    target_sources(SDL3-shared PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/sdl_activity_mutex_bridge.c"
+    )
+endif()
 
 # Android debug APKs are used for packaging/logcat, not the original game's fuzzy
 # debugger. Several decompilation-only debugger methods are intentionally absent;
@@ -37,6 +47,7 @@ target_sources(strikers_ode PRIVATE
 
 add_library(strikers_android SHARED
     android_link_anchor.c
+    android_sdl_mutex_shim.c
     animation_missing_shim.c
     gx_efb_shim.cpp
     stats_gatherer_shim.cpp
