@@ -57,9 +57,9 @@ android {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_shared")
                 cppFlags += listOf("-std=c++17")
-                // Only package the Android shared library. The desktop executable
-                // and dependency helper targets are not Android APK outputs.
-                targets += listOf("strikers_android")
+                // Build/package SDL3 as its own Android shared runtime, then the
+                // native Strikers library that depends on it.
+                targets += listOf("SDL3-shared", "strikers_android")
             }
         }
     }
