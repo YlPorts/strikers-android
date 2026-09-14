@@ -30,10 +30,11 @@ stuff common to all spaces
 #define _ODE_COLLISION_SPACE_INTERNAL_H_
 
 #if defined(__ANDROID__)
-// Bionic keeps the heap API in malloc.h as well as stdlib.h. Pull it in here
-// explicitly because this ODE translation unit calls malloc() directly and
-// the decomp's host header layering can hide that declaration on Android.
-#include <malloc.h>
+// collision_space.cpp has two direct malloc() calls. The decomp/MSL header
+// layering hides Bionic's declaration in this C++11 translation unit, while
+// ODE already exposes the platform-safe allocator used by the rest of the
+// engine. Keep this Android-only and local to the collision-space module.
+#define malloc(size) dAlloc(size)
 #endif
 
 #define ALLOCA(x) dALLOCA16(x)
