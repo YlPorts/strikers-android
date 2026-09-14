@@ -34,7 +34,7 @@ Java_com_ylports_strikers_MainActivity_nativeBootstrapInit(
     __android_log_print(
             ANDROID_LOG_INFO,
             kLogTag,
-            "Native bootstrap initialized; filesDir=%s",
+            "Native Android bridge initialized; filesDir=%s",
             g_filesDir.c_str());
 }
 
@@ -50,14 +50,14 @@ Java_com_ylports_strikers_MainActivity_nativeBuildInfo(JNIEnv* env, jclass) {
     constexpr const char* arch = "unknown";
 #endif
 
-    std::string info = "Native bootstrap OK · ";
+    std::string info = "Native Strikers core · ";
     info += arch;
     info += " · API ";
     info += std::to_string(__ANDROID_API__);
     return env->NewStringUTF(info.c_str());
 }
 
-JNIEXPORT jint JNI_OnLoad(JavaVM*, void*) {
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "libstrikers_android loaded");
-    return JNI_VERSION_1_6;
-}
+// Do not define JNI_OnLoad here. SDL3's Android backend owns JNI_OnLoad and uses
+// it to register SDLActivity, audio, controller and HID native methods. Defining a
+// second copy in this bridge makes the full libstrikers.so link fail and would
+// bypass SDL's required Java/native registration even if it were allowed.
