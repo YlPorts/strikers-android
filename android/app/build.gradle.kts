@@ -82,9 +82,9 @@ android {
 
     sourceSets {
         getByName("main") {
-            // SDL's Android Java glue must match the exact SDL revision linked
-            // statically into libstrikers.so by Aurora.
-            java.srcDir(sdlJavaDir)
+            // Use a concrete File for AGP 9.4; preBuild below carries the task
+            // dependency that generates this directory.
+            java.srcDir(sdlJavaDir.get().asFile)
         }
     }
 
