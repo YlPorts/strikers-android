@@ -24,6 +24,16 @@
 #include <ode/memory.h>
 #include <ode/error.h>
 
+#if defined(__ANDROID__)
+// The decomp puts its MSL compatibility headers ahead of Bionic's libc
+// headers. Most host declarations still arrive through the forced prelude,
+// but the allocator names are intentionally absent in this TU on Android.
+// Bind ODE's default handlers directly to the standard Bionic libc ABI.
+extern "C" void* malloc(size_t size);
+extern "C" void* realloc(void* ptr, size_t size);
+extern "C" void free(void* ptr);
+#endif
+
 static dAllocFunction* allocfn = 0;
 static dReallocFunction* reallocfn = 0;
 static dFreeFunction* freefn = 0;
