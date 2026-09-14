@@ -26,7 +26,7 @@ import java.io.IOException;
  */
 public final class GameBootstrapActivity extends Activity {
     public static final String EXTRA_GAME_URI = "com.ylports.strikers.GAME_URI";
-    public static final String LAST_RUN_LOG = "last-run.log";
+    public static final String LAST_RUN_LOG = RunLog.FILE_NAME;
 
     // Keep the descriptor alive for the lifetime of the :game process. libstrikers.so
     // re-opens /proc/self/fd/N and needs the underlying SAF descriptor to remain valid.
@@ -37,12 +37,16 @@ public final class GameBootstrapActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        RunLog.installJavaCrashHandler(this);
+        RunLog.append(this, "bootstrap: onCreate before Activity.onCreate");
         super.onCreate(savedInstanceState);
+        RunLog.append(this, "bootstrap: Activity.onCreate complete");
         showPreparing("Preparando Super Mario Strikers…");
         prepareAndLaunch();
     }
 
     private void showPreparing(String message) {
+        RunLog.append(this, "bootstrap UI: " + message);
         TextView text = new TextView(this);
         text.setText(message);
         text.setTextColor(Color.WHITE);
@@ -56,62 +60,80 @@ public final class GameBootstrapActivity extends Activity {
     private void prepareAndLaunch() {
         String rawUri = getIntent().getStringExtra(EXTRA_GAME_URI);
         if (rawUri == null || rawUri.isEmpty()) {
+            RunLog.append(this, "bootstrap: no GAME_URI extra");
             showError("No se recibió una imagen del juego.");
             return;
         }
 
         try {
+            RunLog.append(this, "bootstrap: opening SAF descriptor");
             closeGameImageFd();
             Uri uri = Uri.parse(rawUri);
             gameImageFd = getContentResolver().openFileDescriptor(uri, "r");
             if (gameImageFd == null) {
                 throw new IOException("Android no devolvió descriptor");
             }
+            RunLog.append(this, "bootstrap: descriptor opened fd=" + gameImageFd.getFd());
 
             // The disc reader performs random seeks. Cloud-only providers sometimes
             // expose a pipe instead; reject those before loading the native runtime.
             Os.lseek(gameImageFd.getFileDescriptor(), 0, OsConstants.SEEK_SET);
             String nativePath = "/proc/self/fd/" + gameImageFd.getFd();
+            RunLog.append(this, "bootstrap: descriptor is seekable; native path ready");
+
+            // Important: some Strikers/Aurora initialization can happen while the shared
+            // library is being loaded, before SDL_main. Export every variable first.
+            Os.setenv("STRIKERS_DATA", nativePath, true);
+            Os.setenv("STRIKERS_FULLSCREEN", "1", true);
+            Os.setenv("STRIKERS_NO_MESSAGEBOX", "1", true);
+            RunLog.append(this, "bootstrap: native environment exported before library load");
 
             showPreparing("Verificando imagen de Super Mario Strikers…");
             try {
+                RunLog.append(this, "bootstrap: System.loadLibrary(strikers) begin");
                 System.loadLibrary("strikers");
+                RunLog.append(this, "bootstrap: System.loadLibrary(strikers) OK");
             } catch (UnsatisfiedLinkError e) {
+                RunLog.append(this, "bootstrap: native library load failed: " + safeMessage(e));
                 closeGameImageFd();
                 showError("No se pudo cargar el núcleo nativo ARM64.\n\n" + safeMessage(e));
                 return;
             }
 
+            RunLog.append(this, "bootstrap: validating disc with native reader");
             String validationError = nativeValidateDiscPath(nativePath);
             if (validationError != null && !validationError.isEmpty()) {
+                RunLog.append(this, "bootstrap: disc validation failed: " + validationError.replace('\n', ' '));
                 closeGameImageFd();
                 showError(validationError);
                 return;
             }
+            RunLog.append(this, "bootstrap: disc validation OK");
 
-            File runLog = new File(getFilesDir(), LAST_RUN_LOG);
+            File runLog = RunLog.file(this);
+            RunLog.append(this, "bootstrap: attaching native stderr to durable log");
             nativeBeginRunLog(runLog.getAbsolutePath());
-
-            Os.setenv("STRIKERS_DATA", nativePath, true);
-            Os.setenv("STRIKERS_FULLSCREEN", "1", true);
-            // Android cannot reliably present the desktop fatal-message-box path.
-            // Keep fatal details in last-run.log and let the launcher show them.
-            Os.setenv("STRIKERS_NO_MESSAGEBOX", "1", true);
+            RunLog.append(this, "bootstrap: native stderr attached");
 
             Intent nativeGame = new Intent();
             nativeGame.setClassName(getPackageName(), getPackageName() + ".StrikersActivity");
+            RunLog.append(this, "bootstrap: starting StrikersActivity");
             startActivity(nativeGame);
+            RunLog.append(this, "bootstrap: startActivity returned; finishing bootstrap");
             finish();
         } catch (ErrnoException e) {
+            RunLog.append(this, "bootstrap: descriptor is not seekable: " + safeMessage(e));
             closeGameImageFd();
             showError("La imagen no permite acceso aleatorio. Muévela al almacenamiento interno del teléfono e inténtalo de nuevo.");
         } catch (Exception e) {
+            RunLog.append(this, "bootstrap: exception " + e.getClass().getSimpleName() + ": " + safeMessage(e));
             closeGameImageFd();
             showError("No se pudo preparar la imagen del juego.\n\n" + e.getClass().getSimpleName() + ": " + safeMessage(e));
         }
     }
 
     private void showError(String message) {
+        RunLog.append(this, "bootstrap: showing error screen");
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
