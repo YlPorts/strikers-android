@@ -22,6 +22,9 @@ android {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_shared")
                 cppFlags += listOf("-std=c++17")
+                // Only package the Android shared library. The desktop executable
+                // and dependency helper targets are not Android APK outputs.
+                targets += listOf("strikers_android")
             }
         }
     }
