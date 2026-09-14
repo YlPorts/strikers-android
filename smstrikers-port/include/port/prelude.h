@@ -45,6 +45,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// Android's libc++ and the original game's MSL headers both use standard C header names and include
+// guards. In a few translation units the legacy guard wins before Bionic's allocator declarations
+// become visible, even though <stdlib.h> was requested above. The symbols are still normal Bionic C
+// ABI exports; making those four declarations explicit here gives every force-included source the
+// same host allocator surface and also lets libc++'s later `using ::malloc` declarations resolve.
+#if defined(__ANDROID__)
+#ifdef __cplusplus
+extern "C" {
+#endif
+void* malloc(size_t size);
+void* calloc(size_t count, size_t size);
+void* realloc(void* ptr, size_t size);
+void free(void* ptr);
+#ifdef __cplusplus
+}
+#endif
+#endif
+
 
 // MSL declares va_list as `typedef __va_list_struct __va_list[1]`, and headers in the tree spell
 // the underlying name directly.
