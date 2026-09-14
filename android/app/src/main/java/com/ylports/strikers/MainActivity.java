@@ -6,6 +6,8 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
+import android.system.Os;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
@@ -15,30 +17,26 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import java.io.IOException;
 
 public final class MainActivity extends Activity {
-    private static final int PICK_GAME_TREE = 1001;
+    private static final int PICK_GAME_IMAGE = 1001;
     private static final String PREFS = "strikers_android";
-    private static final String PREF_GAME_TREE = "game_tree_uri";
+    private static final String PREF_GAME_URI = "game_image_uri";
 
-    static {
-        // The APK now packages the same full native target validated by
-        // android-full-link: cmake/android -> libstrikers.so.
-        System.loadLibrary("strikers");
-    }
+    // Keep the SAF descriptor alive while Strikers is running. The native port opens
+    // /proc/self/fd/N as a normal seekable disc image, avoiding a 1.4 GB copy.
+    private static ParcelFileDescriptor gameImageFd;
 
     private TextView statusView;
-
-    private static native void nativeBootstrapInit(String filesDir);
-    private static native String nativeBuildInfo();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         enterImmersiveMode();
-
-        nativeBootstrapInit(getFilesDir().getAbsolutePath());
         setContentView(buildLauncherView());
     }
 
@@ -77,17 +75,27 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
         Button chooseGame = new Button(this);
-        chooseGame.setText("Seleccionar carpeta extraída del juego");
+        chooseGame.setText("Seleccionar ISO / GCM");
         chooseGame.setAllCaps(false);
-        chooseGame.setOnClickListener(v -> chooseGameTree());
+        chooseGame.setOnClickListener(v -> chooseGameImage());
 
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
                 Math.min(dp(440), getResources().getDisplayMetrics().widthPixels - dp(64)),
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         root.addView(chooseGame, buttonParams);
 
+        Button playGame = new Button(this);
+        playGame.setText("Jugar");
+        playGame.setAllCaps(false);
+        playGame.setOnClickListener(v -> launchGame());
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(
+                Math.min(dp(440), getResources().getDisplayMetrics().widthPixels - dp(64)),
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        playParams.topMargin = dp(12);
+        root.addView(playGame, playParams);
+
         TextView note = new TextView(this);
-        note.setText("Build de desarrollo: núcleo completo ARM64 empaquetado. Siguiente etapa: arrancar Aurora/SDL y presentar el render del juego.");
+        note.setText("Build de desarrollo: núcleo completo + SDL3/Aurora. La imagen se usa directamente desde Android sin copiarla al almacenamiento interno.");
         note.setTextColor(Color.rgb(130, 138, 150));
         note.setTextSize(12f);
         note.setGravity(Gravity.CENTER);
@@ -100,51 +108,86 @@ public final class MainActivity extends Activity {
     }
 
     private String initialStatus() {
-        StringBuilder status = new StringBuilder(nativeBuildInfo());
-        String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_GAME_TREE, null);
+        String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_GAME_URI, null);
         if (saved == null) {
-            status.append("\nDatos del juego: sin seleccionar");
-        } else {
-            status.append("\nDatos del juego: seleccionados");
+            return "Núcleo ARM64 listo · SDL/Aurora conectado\nImagen del juego: sin seleccionar";
         }
-        return status.toString();
+        return "Núcleo ARM64 listo · SDL/Aurora conectado\nImagen del juego: seleccionada";
     }
 
-    private void chooseGameTree() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+    private void chooseGameImage() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-                | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
-        startActivityForResult(intent, PICK_GAME_TREE);
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(intent, PICK_GAME_IMAGE);
     }
 
     @Override
     @SuppressWarnings("deprecation")
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != PICK_GAME_TREE || resultCode != RESULT_OK || data == null) {
+        if (requestCode != PICK_GAME_IMAGE || resultCode != RESULT_OK || data == null) {
             return;
         }
 
-        Uri tree = data.getData();
-        if (tree == null) {
+        Uri image = data.getData();
+        if (image == null) {
             return;
         }
 
-        int takeFlags = data.getFlags()
-                & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        int takeFlags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
         try {
-            getContentResolver().takePersistableUriPermission(tree, takeFlags);
+            getContentResolver().takePersistableUriPermission(image, takeFlags);
         } catch (SecurityException ignored) {
-            // Some document providers grant access for the process but do not implement persistence.
+            // Some document providers keep the descriptor usable for this process but
+            // do not implement persistable grants.
         }
 
         getSharedPreferences(PREFS, MODE_PRIVATE)
                 .edit()
-                .putString(PREF_GAME_TREE, tree.toString())
+                .putString(PREF_GAME_URI, image.toString())
                 .apply();
-        statusView.setText(nativeBuildInfo() + "\nDatos del juego: seleccionados");
+        statusView.setText("Núcleo ARM64 listo · SDL/Aurora conectado\nImagen del juego: seleccionada");
+    }
+
+    private void launchGame() {
+        String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_GAME_URI, null);
+        if (saved == null) {
+            Toast.makeText(this, "Selecciona primero tu imagen de Super Mario Strikers.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try {
+            closeGameImageFd();
+            gameImageFd = getContentResolver().openFileDescriptor(Uri.parse(saved), "r");
+            if (gameImageFd == null) {
+                throw new IOException("Android no devolvió un descriptor para la imagen");
+            }
+
+            String nativePath = "/proc/self/fd/" + gameImageFd.getFd();
+            Os.setenv("STRIKERS_DATA", nativePath, true);
+            Os.setenv("STRIKERS_FULLSCREEN", "1", true);
+
+            statusView.setText("Iniciando SDL/Aurora…");
+            startActivity(new Intent(this, StrikersActivity.class));
+        } catch (Exception e) {
+            closeGameImageFd();
+            statusView.setText("No se pudo abrir la imagen del juego\n" + e.getClass().getSimpleName());
+            Toast.makeText(this, "No se pudo abrir la imagen seleccionada.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private static void closeGameImageFd() {
+        if (gameImageFd == null) {
+            return;
+        }
+        try {
+            gameImageFd.close();
+        } catch (IOException ignored) {
+        }
+        gameImageFd = null;
     }
 
     private void enterImmersiveMode() {
