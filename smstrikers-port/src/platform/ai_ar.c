@@ -6,6 +6,13 @@
 #include "dolphin/ai.h"
 #include "dolphin/types.h"
 
+#if defined(__ANDROID__)
+// The decomp's legacy C headers can consume the stdlib include guards before
+// Bionic's declaration is visible to this host shim. calloc is still provided
+// by Bionic with the normal C ABI, so name that ABI explicitly on Android.
+extern void* calloc(size_t count, size_t size);
+#endif
+
 // ARAM ARInit hands the library a stack of chunk addresses; the game then calls ARAlloc to carve
 // the space up.
 
