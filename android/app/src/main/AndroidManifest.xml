@@ -13,24 +13,36 @@
         android:hardwareAccelerated="true"
         android:hasFragileUserData="true"
         android:label="Strikers Android"
-        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        android:theme="@android:style/Theme.Material.NoActionBar">
 
-        <activity
-            android:name=".StrikersActivity"
-            android:configChanges="colorMode|density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
-            android:exported="false"
-            android:screenOrientation="sensorLandscape" />
-
+        <!-- Pure Java launcher. Keep it in the default process so native crashes cannot kill it. -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
-            android:exported="true"
-            android:screenOrientation="sensorLandscape">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Opens the SAF image and prepares STRIKERS_DATA before SDL is loaded. -->
+        <activity
+            android:name=".GameBootstrapActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:process=":game"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
+
+        <!-- Native SDL/Aurora activity, isolated from the launcher in the same :game process. -->
+        <activity
+            android:name=".StrikersActivity"
+            android:configChanges="colorMode|density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
+            android:exported="false"
+            android:process=":game"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
     </application>
 
 </manifest>
