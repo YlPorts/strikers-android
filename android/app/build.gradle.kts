@@ -46,8 +46,8 @@ android {
         applicationId = "com.ylports.strikers"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.1-sdl-shared-test"
+        versionCode = 3
+        versionName = "0.2.2-sdl-shared-bridge"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -57,8 +57,6 @@ android {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_shared")
                 cppFlags += listOf("-std=c++17")
-                // Build/package SDL3 as its own Android shared runtime, then the
-                // native Strikers library that depends on it.
                 targets += listOf("SDL3-shared", "strikers_android")
             }
         }
@@ -82,8 +80,6 @@ android {
 
     sourceSets {
         getByName("main") {
-            // Use a concrete File for AGP 9.4; preBuild below carries the task
-            // dependency that generates this directory.
             java.srcDir(sdlJavaDir.get().asFile)
         }
     }
