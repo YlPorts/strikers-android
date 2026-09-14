@@ -54,7 +54,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          gradle -p android :app:assembleDebug --stacktrace --info 2>&1 | tee android-apk-build.log
+          gradle --no-daemon -p android :app:assembleDebug --stacktrace 2>&1 | tee android-apk-build.log
 
       - name: Preserve APK build log
         if: always()
