@@ -1,8 +1,5 @@
 #include "NL/nlMemory.h"
 #include <stdlib.h>
-#if defined(__ANDROID__)
-#include <cstdlib>
-#endif
 #include "NL/MemAlloc.h"
 
 #include <types.h>
@@ -12,6 +9,13 @@
 #include "dolphin/dvd.h"
 #include "dolphin/vm/VM.h"
 #include "dolphin/vi/vifuncs.h"
+
+#if defined(__ANDROID__)
+// Some legacy headers in the decomp consume the libc stdlib include guard before
+// libc++ gets to it, leaving std::malloc's using-declaration unresolved. Bionic
+// still exports malloc with the normal C ABI, so name that ABI directly here.
+extern "C" void* malloc(size_t);
+#endif
 
 static u8 s_MemoryInitialized = 0;
 
@@ -63,11 +67,7 @@ void* nlMalloc(size_t size)
 void* operator new(size_t size)
 {
     // PORT: the host heap, not nlMalloc, see the note in tools/vendor.py.
-#if defined(__ANDROID__)
-    void* p = std::malloc(size ? size : 1);
-#else
     void* p = malloc(size ? size : 1);
-#endif
     if (p == NULL)
     {
         OSReport("nlMemory: out of memory allocating %lu bytes\n", size);
