@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.system.Os;
+import android.system.OsConstants;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
@@ -75,7 +76,7 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
         Button chooseGame = new Button(this);
-        chooseGame.setText("Seleccionar ISO / GCM");
+        chooseGame.setText("Seleccionar ISO / GCM / CISO / GCZ");
         chooseGame.setAllCaps(false);
         chooseGame.setOnClickListener(v -> chooseGameImage());
 
@@ -166,6 +167,11 @@ public final class MainActivity extends Activity {
                 throw new IOException("Android no devolvió un descriptor para la imagen");
             }
 
+            // The disc reader needs random access. Local files and normal document
+            // providers are seekable; some cloud providers expose a one-way pipe.
+            // Detect that here instead of letting the native reader fail later.
+            Os.lseek(gameImageFd.getFileDescriptor(), 0, OsConstants.SEEK_SET);
+
             String nativePath = "/proc/self/fd/" + gameImageFd.getFd();
             Os.setenv("STRIKERS_DATA", nativePath, true);
             Os.setenv("STRIKERS_FULLSCREEN", "1", true);
@@ -175,7 +181,11 @@ public final class MainActivity extends Activity {
         } catch (Exception e) {
             closeGameImageFd();
             statusView.setText("No se pudo abrir la imagen del juego\n" + e.getClass().getSimpleName());
-            Toast.makeText(this, "No se pudo abrir la imagen seleccionada.", Toast.LENGTH_LONG).show();
+            Toast.makeText(
+                    this,
+                    "No se pudo usar esa imagen. Si está en la nube, guárdala primero en el teléfono.",
+                    Toast.LENGTH_LONG)
+                    .show();
         }
     }
 
