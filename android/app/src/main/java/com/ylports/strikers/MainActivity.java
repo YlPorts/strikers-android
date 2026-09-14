@@ -12,6 +12,12 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.ArrayDeque;
+
 /**
  * Deliberately tiny Java-only launcher.
  *
@@ -25,11 +31,24 @@ public final class MainActivity extends Activity {
     private static final String PREF_GAME_URI = "game_image_uri";
 
     private TextView statusView;
+    private boolean gameLaunchPending;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildLauncherView());
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (statusView != null) {
+            updateStatus();
+            if (gameLaunchPending) {
+                gameLaunchPending = false;
+                appendLastRunLog();
+            }
+        }
     }
 
     private View buildLauncherView() {
@@ -83,7 +102,7 @@ public final class MainActivity extends Activity {
         root.addView(playGame, playParams);
 
         TextView note = new TextView(this);
-        note.setText("El launcher está aislado del proceso del juego para que un fallo nativo no cierre la app completa.");
+        note.setText("Si el proceso del juego vuelve a cerrarse, aquí aparecerán las últimas líneas del arranque nativo.");
         note.setTextColor(Color.rgb(125, 135, 150));
         note.setTextSize(12f);
         note.setGravity(Gravity.CENTER);
@@ -106,6 +125,37 @@ public final class MainActivity extends Activity {
         statusView.setText(saved == null
                 ? "Launcher listo\nImagen del juego: sin seleccionar"
                 : "Launcher listo\nImagen del juego: seleccionada");
+    }
+
+    private void appendLastRunLog() {
+        File log = new File(getFilesDir(), GameBootstrapActivity.LAST_RUN_LOG);
+        if (!log.isFile() || log.length() == 0) {
+            return;
+        }
+
+        ArrayDeque<String> tail = new ArrayDeque<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(log))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (tail.size() == 14) {
+                    tail.removeFirst();
+                }
+                tail.addLast(line);
+            }
+        } catch (IOException e) {
+            statusView.append("\n\nNo se pudo leer last-run.log: " + e.getClass().getSimpleName());
+            return;
+        }
+
+        if (tail.isEmpty()) {
+            return;
+        }
+
+        StringBuilder text = new StringBuilder("\n\nÚltimo arranque nativo:\n");
+        for (String line : tail) {
+            text.append(line).append('\n');
+        }
+        statusView.append(text.toString().trim());
     }
 
     private void chooseGameImage() {
@@ -151,14 +201,21 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        File oldLog = new File(getFilesDir(), GameBootstrapActivity.LAST_RUN_LOG);
+        if (oldLog.exists()) {
+            oldLog.delete();
+        }
+
         Intent game = new Intent();
         game.setClassName(getPackageName(), getPackageName() + ".GameBootstrapActivity");
         game.putExtra(GameBootstrapActivity.EXTRA_GAME_URI, saved);
         game.setData(Uri.parse(saved));
         game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
+            gameLaunchPending = true;
             startActivity(game);
         } catch (Exception e) {
+            gameLaunchPending = false;
             Toast.makeText(this, "No se pudo iniciar el proceso del juego: " + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
         }
     }
