@@ -54,10 +54,10 @@ public final class StrikersActivity extends SDLActivity {
 
     @Override
     protected String[] getLibraries() {
-        RunLog.append(this, "SDL activity: getLibraries -> strikers");
-        // SDL3 is linked statically into libstrikers.so by Aurora, so loading the
-        // game library also runs SDL's JNI_OnLoad and registers SDLActivity natives.
-        return new String[] { "strikers" };
+        // Match SDL3's Android project layout: SDL's JNI runtime is loaded first,
+        // then SDLActivity runs SDL_main from the Strikers library.
+        RunLog.append(this, "SDL activity: getLibraries -> SDL3, strikers");
+        return new String[] { "SDL3", "strikers" };
     }
 
     @Override
