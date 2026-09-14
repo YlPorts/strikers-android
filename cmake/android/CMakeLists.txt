@@ -19,6 +19,11 @@ set(AURORA_DAWN_LINKAGE static CACHE STRING "" FORCE)
 set(STRIKERS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../smstrikers-port")
 add_subdirectory("${STRIKERS_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/strikers-core" EXCLUDE_FROM_ALL)
 
+# The retail build took the LCP solver from a prebuilt ODE library, so it is not in
+# build-sources.txt. Android links the native game as one shared object and needs the
+# real implementation here rather than the generated placeholder stub.
+target_sources(strikers_ode PRIVATE "${STRIKERS_ROOT}/src/ode/lcp.cpp")
+
 add_library(strikers_android SHARED android_link_anchor.c)
 set_target_properties(strikers_android PROPERTIES OUTPUT_NAME "strikers")
 
