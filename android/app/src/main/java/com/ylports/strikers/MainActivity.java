@@ -2,12 +2,10 @@ package com.ylports.strikers;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.ActivityInfo;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
@@ -24,7 +22,9 @@ public final class MainActivity extends Activity {
     private static final String PREF_GAME_TREE = "game_tree_uri";
 
     static {
-        System.loadLibrary("strikers_android");
+        // The APK now packages the same full native target validated by
+        // android-full-link: cmake/android -> libstrikers.so.
+        System.loadLibrary("strikers");
     }
 
     private TextView statusView;
@@ -87,7 +87,7 @@ public final class MainActivity extends Activity {
         root.addView(chooseGame, buttonParams);
 
         TextView note = new TextView(this);
-        note.setText("Build de desarrollo: launcher + NDK arm64. El render de Aurora/SDL se conecta en la siguiente etapa.");
+        note.setText("Build de desarrollo: núcleo completo ARM64 empaquetado. Siguiente etapa: arrancar Aurora/SDL y presentar el render del juego.");
         note.setTextColor(Color.rgb(130, 138, 150));
         note.setTextSize(12f);
         note.setGravity(Gravity.CENTER);
