@@ -24,7 +24,10 @@ add_subdirectory("${STRIKERS_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/strikers-core" 
 # real implementation here rather than the generated placeholder stub.
 target_sources(strikers_ode PRIVATE "${STRIKERS_ROOT}/src/ode/lcp.cpp")
 
-add_library(strikers_android SHARED android_link_anchor.c)
+add_library(strikers_android SHARED
+    android_link_anchor.c
+    gx_efb_shim.cpp
+)
 set_target_properties(strikers_android PROPERTIES OUTPUT_NAME "strikers")
 
 # Linking an OBJECT_LIBRARY target is supported by our CMake baseline and adds both
