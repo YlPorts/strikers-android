@@ -47,6 +47,7 @@ jobs:
             -DSTRIKERS_AURORA=ON \
             -DSTRIKERS_FFMPEG=OFF \
             -DSTRIKERS_ASAN=OFF \
+            -DAURORA_CACHE_USE_ZSTD=OFF \
             -DAURORA_SDL3_PROVIDER=vendor \
             -DAURORA_SDL3_LINKAGE=static \
             -DAURORA_DAWN_PROVIDER=package \
