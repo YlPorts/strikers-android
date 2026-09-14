@@ -26,6 +26,7 @@ target_sources(strikers_ode PRIVATE "${STRIKERS_ROOT}/src/ode/lcp.cpp")
 
 add_library(strikers_android SHARED
     android_link_anchor.c
+    animation_missing_shim.c
     gx_efb_shim.cpp
     stats_gatherer_shim.cpp
 )
