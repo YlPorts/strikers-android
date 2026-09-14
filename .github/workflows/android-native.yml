@@ -97,7 +97,17 @@ jobs:
       - name: Compile every in-scope game source
         working-directory: smstrikers-port
         shell: bash
-        run: cmake --build build-android-scan --target strikers_scan --parallel 2
+        run: |
+          set -o pipefail
+          cmake --build build-android-scan --target strikers_scan --parallel 2 2>&1 | tee native-scan.log
+
+      - name: Preserve native scan log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: strikers-android-native-scan-log
+          path: smstrikers-port/native-scan.log
+          if-no-files-found: ignore
 
       - name: Preserve compile database
         if: always()
