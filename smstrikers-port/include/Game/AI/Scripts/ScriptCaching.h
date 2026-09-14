@@ -4,13 +4,28 @@
 #include "NL/nlSingleton.h"
 #include "NL/nlAVLTree.h"
 #include "Game/AI/FuzzyVariant.h"
+
+// The original Metrowerks tree implementation owns its own pair type. Android's
+// libc++ also exposes std::pair through the __ndk1 inline namespace, so remap
+// only while parsing this legacy header. The macro is immediately removed and
+// cannot leak into normal libc++ headers or game code.
+#if defined(__ANDROID__)
+#define pair msl_pair
+#endif
 #include "PowerPC_EABI_Support/MSL_C++/MSL_Common/msl_tree.h"
+#if defined(__ANDROID__)
+#undef pair
+#endif
 
 extern unsigned char g_bScriptQuestionCachingOn;
 extern unsigned char g_bScriptQuestionCachingUseSTD;
 
 // PORT: uintptr_t keys, the key is two pointers summed, and is 32 bits on Windows otherwise.
+#if defined(__ANDROID__)
+typedef std::msl_pair<const uintptr_t, FuzzyVariant> ScriptCachePair;
+#else
 typedef std::pair<const uintptr_t, FuzzyVariant> ScriptCachePair;
+#endif
 typedef std::map<uintptr_t, FuzzyVariant, std::less<uintptr_t>, std::allocator<ScriptCachePair> > ScriptCacheMap;
 typedef std::__tree<ScriptCachePair, ScriptCacheMap::value_compare, std::allocator<ScriptCachePair> > ScriptCacheTree;
 
