@@ -62,7 +62,11 @@
 #if defined(__cplusplus) && __cplusplus >= 201103L
 #include <cstddef>
 #include <new>
-#include <type_traits>
+
+// Do not include <type_traits> here. This header is force-included into every translation unit and
+// libc++'s type-traits dependency graph forward-declares std::pair. The original game also ships a
+// small MSL implementation of std::pair/map; having both declarations visible makes those legacy
+// containers ambiguous on Android's libc++. Nothing in this prelude uses type_traits.
 
 extern "C" void nlFree(void* ptr);
 // size_t, not unsigned long: a different type on Windows, and the mangled name differs with it.
