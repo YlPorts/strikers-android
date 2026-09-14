@@ -1,5 +1,11 @@
 #include "NL/nlMemory.h"
 #include <stdlib.h>
+#if defined(__ANDROID__)
+// Bionic keeps the allocator declarations in <malloc.h> as well. Pull it in
+// explicitly because this translation unit defines the global operator new and
+// must call the host allocator rather than recursing through nlMalloc.
+#include <malloc.h>
+#endif
 #include "NL/MemAlloc.h"
 
 #include <types.h>
@@ -138,30 +144,11 @@ void nlInitMemory()
         arenaLo = OSInitAlloc(arenaLo, arenaHi, 1);
         OSSetArenaLo(arenaLo);
 
-        uintptr_t alignedLo = ((uintptr_t)arenaLo + 0x1F) & ~0x1F;
-        arenaLo = (void*)((uintptr_t)arenaHi & ~0x1F);
-        uintptr_t heapSize = (uintptr_t)arenaLo - alignedLo;
-
-        s32 heap = OSCreateHeap((void*)alignedLo, arenaLo);
-        OSSetCurrentHeap(heap);
-        OSSetArenaLo(arenaLo);
-
-        void* ptr = OSAllocFromHeap(__OSCurrHeap, heapSize - 0x40000);
-        u32 i;
-        for (i = 0; i < heapSize - 0x40000; i++)
-        {
-            ((s8*)ptr)[i] = -0x33;
-        }
-
-        StandardAllocator.Initialize(ptr, heapSize - 0x40000);
-        // PORT: 0x7E000000 is the console's MMU window; use the host allocation that src/platform/vm.c made for VMAlloc.
-        {
-            size_t vmSize = 0;
-            void* vmBase = VMPortGetWindow(&vmSize);
-            VirtualAllocator.Initialize(vmBase, (u32)vmSize);
-        }
-        OSReport("After nlInitMemory\n");
-        OSReport("Free Memory: %u\n", StandardAllocator.TotalFreeMemory());
-        OSReport("Largest Free Block: %u\n", StandardAllocator.LargestFreeBlock());
+        OSHeapHandle handle = OSCreateHeap(arenaLo, arenaHi);
+        OSSetCurrentHeap(handle);
+        size_t windowSize = 0;
+        void* window = VMPortGetWindow(&windowSize);
+        VirtualAllocator.Initialize(window, windowSize);
+        StandardAllocator.Initialize(arenaLo, (uintptr_t)arenaHi - (uintptr_t)arenaLo);
     }
 }
