@@ -76,6 +76,7 @@ target_sources(strikers_ode PRIVATE
 
 add_library(strikers_android SHARED
     android_link_anchor.c
+    android_early_crash_probe.c
     android_sdl_mutex_shim.c
     animation_missing_shim.c
     gx_efb_shim.cpp
