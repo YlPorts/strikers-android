@@ -1,6 +1,18 @@
 cmake_minimum_required(VERSION 3.24)
 project(strikers_android_app LANGUAGES C CXX)
 
+# Small library loaded before libstrikers.so. It owns no game code; its only job is to
+# capture a fatal signal that happens while the dynamic loader is running C/C++ constructors.
+add_library(strikers_diag SHARED
+    "${CMAKE_CURRENT_LIST_DIR}/strikers_diag.cpp"
+)
+target_compile_features(strikers_diag PRIVATE cxx_std_17)
+target_compile_options(strikers_diag PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
 # Build the exact full native library that is validated by android-full-link.
 # Keeping this as an add_subdirectory means the APK and the standalone linker
 # workflow cannot silently drift onto different source sets.
