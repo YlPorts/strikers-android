@@ -470,7 +470,7 @@ static FILE* open_disc_stream(const char* path)
 {
 #if defined(__ANDROID__)
     FILE* android_fd = NULL;
-    if (path != NULL && strncmp(path, "/proc/self/fd/", 14) == 0)
+    if (path != NULL && strncmp(path, "/proc/self/fd/", sizeof("/proc/self/fd/") - 1) == 0)
     {
         android_fd = open_android_proc_fd(path);
         if (android_fd != NULL)
