@@ -11,6 +11,13 @@
 
 #include "port/aurora_compat.h"
 
+#if defined(__ANDROID__)
+// Implemented by the Android JNI bridge. MotionEvents arrive on the UI thread;
+// applying their snapshot here makes PADSetVirtualStatus happen on the same game
+// thread that immediately performs PADRead through VBlankPadUpdate.
+extern void PortAndroidApplyTouchState(void);
+#endif
+
 void GXWaitDrawDone(void)
 {
     GXDrawDone();
@@ -110,6 +117,9 @@ PADSamplingCallback PADSetSamplingCallback(PADSamplingCallback callback)
 
 void PortInvokePadSamplingCallback(void)
 {
+#if defined(__ANDROID__)
+    PortAndroidApplyTouchState();
+#endif
     if (s_pad_sampling_cb)
         s_pad_sampling_cb();
 }
