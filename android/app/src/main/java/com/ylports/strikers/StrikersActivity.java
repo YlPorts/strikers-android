@@ -175,9 +175,9 @@ public final class StrikersActivity extends SDLActivity
      * Transparent multitouch overlay. It feeds Aurora's virtual GameCube PAD instead
      * of sending keyboard events, so menus and gameplay see a normal controller.
      *
-     * Each finger keeps a role by Android pointer ID. That avoids the common bug where
-     * pointer indexes are renumbered after one finger is lifted and another button/stick
-     * suddenly stops responding or jumps to the wrong control.
+     * Each finger keeps a role by Android pointer ID. Analog roles are exclusive and
+     * sticky until that finger is lifted, so pointer-index renumbering cannot kill the
+     * movement stick while another button is being pressed.
      */
     private static final class TouchControllerView extends View {
         private static final int PAD_BUTTON_LEFT = 0x0001;
@@ -387,22 +387,28 @@ public final class StrikersActivity extends SDLActivity
                 return true;
             }
 
+            int liftedPointerId = -1;
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
                 int index = event.getActionIndex();
                 int pointerId = event.getPointerId(index);
-                int role = roleForPoint(event.getX(index), event.getY(index));
+                int role = roleForPoint(event.getX(index), event.getY(index), pointerId);
                 if (role != ROLE_NONE) {
                     pointerRoles.put(pointerId, role);
                 }
             } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
                 int index = event.getActionIndex();
-                pointerRoles.delete(event.getPointerId(index));
+                liftedPointerId = event.getPointerId(index);
+                pointerRoles.delete(liftedPointerId);
                 if (action == MotionEvent.ACTION_UP) {
                     performClick();
                 }
             }
 
-            rebuildState(event);
+            // A finger that landed slightly outside the painted circle can still slide
+            // into an analog stick and claim it. This is especially important on small
+            // phone screens where the old exact-down requirement felt like a dead stick.
+            claimUnassignedAnalogPointers(event, liftedPointerId);
+            rebuildState(event, liftedPointerId);
             return true;
         }
 
@@ -417,7 +423,7 @@ public final class StrikersActivity extends SDLActivity
             setState(0, 0, 0, 0, 0, 0, 0);
         }
 
-        private int roleForPoint(float px, float py) {
+        private int roleForPoint(float px, float py, int pointerId) {
             if (lRect.contains(px, py)) return ROLE_L;
             if (rRect.contains(px, py)) return ROLE_R;
             if (zRect.contains(px, py)) return ROLE_Z;
@@ -428,6 +434,17 @@ public final class StrikersActivity extends SDLActivity
             if (insideCircle(px, py, xX, xY, faceRadius * 1.06f)) return ROLE_X;
             if (insideCircle(px, py, yX, yY, faceRadius * 1.06f)) return ROLE_Y;
 
+            // Analog sticks get a larger invisible capture circle than the painted
+            // circle, and only one pointer may own each stick at a time.
+            if (!roleInUse(ROLE_MAIN_STICK, pointerId)
+                    && insideCircle(px, py, stickCx, stickCy, stickRadius * 1.58f)) {
+                return ROLE_MAIN_STICK;
+            }
+            if (!roleInUse(ROLE_C_STICK, pointerId)
+                    && insideCircle(px, py, cStickCx, cStickCy, cStickRadius * 1.55f)) {
+                return ROLE_C_STICK;
+            }
+
             float dpadHit = dpadStep * 0.74f;
             if (insideCircle(px, py, dpadCx - dpadStep, dpadCy, dpadHit)
                     || insideCircle(px, py, dpadCx + dpadStep, dpadCy, dpadHit)
@@ -435,17 +452,39 @@ public final class StrikersActivity extends SDLActivity
                     || insideCircle(px, py, dpadCx, dpadCy + dpadStep, dpadHit)) {
                 return ROLE_DPAD;
             }
-
-            if (insideCircle(px, py, stickCx, stickCy, stickRadius * 1.28f)) {
-                return ROLE_MAIN_STICK;
-            }
-            if (insideCircle(px, py, cStickCx, cStickCy, cStickRadius * 1.34f)) {
-                return ROLE_C_STICK;
-            }
             return ROLE_NONE;
         }
 
-        private void rebuildState(MotionEvent event) {
+        private boolean roleInUse(int role, int exceptPointerId) {
+            for (int i = 0; i < pointerRoles.size(); i++) {
+                if (pointerRoles.keyAt(i) != exceptPointerId
+                        && pointerRoles.valueAt(i) == role) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void claimUnassignedAnalogPointers(MotionEvent event, int liftedPointerId) {
+            for (int i = 0; i < event.getPointerCount(); i++) {
+                int pointerId = event.getPointerId(i);
+                if (pointerId == liftedPointerId
+                        || pointerRoles.get(pointerId, ROLE_NONE) != ROLE_NONE) {
+                    continue;
+                }
+                float px = event.getX(i);
+                float py = event.getY(i);
+                if (!roleInUse(ROLE_MAIN_STICK, pointerId)
+                        && insideCircle(px, py, stickCx, stickCy, stickRadius * 1.72f)) {
+                    pointerRoles.put(pointerId, ROLE_MAIN_STICK);
+                } else if (!roleInUse(ROLE_C_STICK, pointerId)
+                        && insideCircle(px, py, cStickCx, cStickCy, cStickRadius * 1.68f)) {
+                    pointerRoles.put(pointerId, ROLE_C_STICK);
+                }
+            }
+        }
+
+        private void rebuildState(MotionEvent event, int liftedPointerId) {
             int newButtons = 0;
             int newStickX = 0;
             int newStickY = 0;
@@ -456,6 +495,9 @@ public final class StrikersActivity extends SDLActivity
 
             for (int i = 0; i < event.getPointerCount(); i++) {
                 int pointerId = event.getPointerId(i);
+                if (pointerId == liftedPointerId) {
+                    continue;
+                }
                 int role = pointerRoles.get(pointerId, ROLE_NONE);
                 if (role == ROLE_NONE) {
                     continue;
@@ -465,15 +507,18 @@ public final class StrikersActivity extends SDLActivity
                 float py = event.getY(i);
                 switch (role) {
                     case ROLE_MAIN_STICK: {
+                        // Reach the full GameCube range before the finger reaches the
+                        // edge of the painted ring. PADClamp will apply the console's
+                        // own deadzone afterwards.
                         float[] axis = axisForAssignedPoint(px, py, stickCx, stickCy,
-                                stickRadius * 0.92f);
+                                stickRadius * 0.78f);
                         newStickX = Math.round(axis[0] * 127f);
                         newStickY = Math.round(-axis[1] * 127f);
                         break;
                     }
                     case ROLE_C_STICK: {
                         float[] axis = axisForAssignedPoint(px, py, cStickCx, cStickCy,
-                                cStickRadius * 0.92f);
+                                cStickRadius * 0.82f);
                         newSubstickX = Math.round(axis[0] * 127f);
                         newSubstickY = Math.round(-axis[1] * 127f);
                         break;
