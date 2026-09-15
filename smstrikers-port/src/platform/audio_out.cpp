@@ -25,8 +25,18 @@ namespace {
 constexpr int kSampleRate = 32000;
 constexpr int kChannels = 2;
 
-// How far ahead to keep the device fed: 30 ms covers a dropped frame at 60 Hz.
-constexpr int kTargetBuffers = 6;
+#if defined(__ANDROID__)
+// Android audio stacks are much more tolerant of a little extra queueing than repeated underruns.
+// Start at 80 ms and temporarily grow toward 120 ms if the device actually starves.
+constexpr int kBaseTargetBuffers = 16;   // 80 ms
+constexpr int kMaxTargetBuffers = 24;    // 120 ms
+constexpr int kAdaptiveStepBuffers = 4;  // 20 ms
+#else
+// Keep the desktop behaviour unchanged.
+constexpr int kBaseTargetBuffers = 6;    // 30 ms
+constexpr int kMaxTargetBuffers = 6;
+constexpr int kAdaptiveStepBuffers = 1;
+#endif
 
 // Ceiling on catch-up, so a long stall does not run the sequencer forward at speed; past this the
 // gap is lost.
@@ -36,6 +46,8 @@ SDL_AudioStream* s_stream = nullptr;
 bool s_ownsSubsystem = false;
 bool s_failed = false;
 int s_logging = -1;
+int s_targetBuffers = kBaseTargetBuffers;
+Uint64 s_lastUnderrunCounter = 0;
 
 unsigned long s_buffers = 0;      // ticks handed to the device
 unsigned long s_underruns = 0;    // updates that found the queue already empty
@@ -67,10 +79,11 @@ void report() {
     s_reported = true;
     const unsigned int frames = salPortBufferBytes() / (kChannels * sizeof(int16_t));
     std::fprintf(stderr,
-                 "[port] audio: %lu ticks (%.1f s of output), %lu underruns, %s\n",
+                 "[port] audio: %lu ticks (%.1f s of output), %lu underruns, %s, final queue target %d ms\n",
                  s_buffers, (double)s_buffers * (double)frames / (double)kSampleRate,
                  s_underruns,
-                 s_everNonSilent ? "output was non-silent" : "output was silent throughout");
+                 s_everNonSilent ? "output was non-silent" : "output was silent throughout",
+                 s_targetBuffers * 5);
 }
 
 } // namespace
@@ -87,6 +100,8 @@ int PortAudioStart(void) {
         return 0;
     }
     s_ownsSubsystem = true;
+    s_targetBuffers = kBaseTargetBuffers;
+    s_lastUnderrunCounter = 0;
 
     SDL_AudioSpec spec;
     std::memset(&spec, 0, sizeof(spec));
@@ -117,9 +132,10 @@ int PortAudioStart(void) {
         if (SDL_GetAudioDeviceFormat(dev, &got, &frames)) {
             std::fprintf(stderr,
                          "[port] audio: device \"%s\" %d Hz %d ch fmt 0x%x, %d-frame buffer; "
-                         "feeding %d Hz s16 stereo in %u-byte ticks\n",
+                         "feeding %d Hz s16 stereo in %u-byte ticks, queue target %d ms\n",
                          SDL_GetAudioDeviceName(dev), got.freq, got.channels,
-                         (unsigned)got.format, frames, kSampleRate, salPortBufferBytes());
+                         (unsigned)got.format, frames, kSampleRate, salPortBufferBytes(),
+                         s_targetBuffers * 5);
         }
     }
     return 1;
@@ -177,10 +193,37 @@ void PortAudioUpdate(void) {
     if (queued < 0)
         return;
 
-    if (queued == 0 && s_buffers != 0)
+    const Uint64 now = SDL_GetPerformanceCounter();
+    const Uint64 freq = SDL_GetPerformanceFrequency();
+    if (queued == 0 && s_buffers != 0) {
         ++s_underruns;
+        s_lastUnderrunCounter = now;
+        if (s_targetBuffers < kMaxTargetBuffers) {
+            s_targetBuffers += kAdaptiveStepBuffers;
+            if (s_targetBuffers > kMaxTargetBuffers)
+                s_targetBuffers = kMaxTargetBuffers;
+            if (logging())
+                std::fprintf(stderr,
+                             "[port] audio: underrun; increasing queue target to %d ms\n",
+                             s_targetBuffers * 5);
+        }
+    } else if (s_targetBuffers > kBaseTargetBuffers
+               && s_lastUnderrunCounter != 0
+               && freq != 0
+               && now - s_lastUnderrunCounter > freq * 8) {
+        // After eight stable seconds, lower latency gradually again instead of staying
+        // permanently at the emergency queue size.
+        s_targetBuffers -= kAdaptiveStepBuffers;
+        if (s_targetBuffers < kBaseTargetBuffers)
+            s_targetBuffers = kBaseTargetBuffers;
+        s_lastUnderrunCounter = now;
+        if (logging())
+            std::fprintf(stderr,
+                         "[port] audio: stable playback; reducing queue target to %d ms\n",
+                         s_targetBuffers * 5);
+    }
 
-    const int target = static_cast<int>(bufBytes) * kTargetBuffers;
+    const int target = static_cast<int>(bufBytes) * s_targetBuffers;
     int want = (target - queued + static_cast<int>(bufBytes) - 1) / static_cast<int>(bufBytes);
     if (want <= 0)
         return;
