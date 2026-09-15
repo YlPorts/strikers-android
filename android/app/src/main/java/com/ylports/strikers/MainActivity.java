@@ -17,6 +17,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayDeque;
+import java.util.Locale;
 
 /**
  * Deliberately tiny Java-only launcher.
@@ -100,7 +101,7 @@ public final class MainActivity extends Activity {
         root.addView(playGame, playParams);
 
         TextView note = new TextView(this);
-        note.setText("El último rastro de arranque se lee siempre desde disco, incluso si Android recrea el launcher.");
+        note.setText("El log técnico completo se conserva en disco; el launcher solo muestra fallos reales o un resumen del último arranque.");
         note.setTextColor(Color.rgb(125, 135, 150));
         note.setTextSize(12f);
         note.setGravity(Gravity.CENTER);
@@ -132,25 +133,76 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        ArrayDeque<String> tail = new ArrayDeque<>();
+        ArrayDeque<String> important = new ArrayDeque<>();
+        boolean rendererStarted = false;
+        boolean gameActivityStarted = false;
         try (BufferedReader reader = new BufferedReader(new FileReader(log))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (tail.size() == 20) {
-                    tail.removeFirst();
+                if (line.contains("[port] render target")
+                        || line.contains("CARD API Initialized")) {
+                    rendererStarted = true;
                 }
-                tail.addLast(line);
+                if (line.contains("SDL activity: onCreate AFTER")) {
+                    gameActivityStarted = true;
+                }
+
+                if (isRealFailureLine(line)) {
+                    if (important.size() == 8) {
+                        important.removeFirst();
+                    }
+                    important.addLast(line);
+                }
             }
         } catch (IOException e) {
             statusView.append("\n\nNo se pudo leer last-run.log: " + e.getClass().getSimpleName());
             return;
         }
 
-        StringBuilder text = new StringBuilder("\n\nÚltimo arranque:\n");
-        for (String line : tail) {
-            text.append(line).append('\n');
+        if (!important.isEmpty()) {
+            StringBuilder text = new StringBuilder("\n\nÚltimo arranque: se detectó un fallo real:\n");
+            for (String line : important) {
+                text.append(line).append('\n');
+            }
+            statusView.append(text.toString().trim());
+            return;
         }
-        statusView.append(text.toString().trim());
+
+        if (rendererStarted) {
+            statusView.append("\n\nÚltimo arranque: juego iniciado y renderer activo.\n"
+                    + "Los mensajes onPause/onStop/surfaceDestroyed al volver aquí son cierre normal de Android, no un crash.");
+        } else if (gameActivityStarted) {
+            statusView.append("\n\nÚltimo arranque: actividad del juego iniciada; no se registró ningún fallo fatal.");
+        } else {
+            statusView.append("\n\nÚltimo arranque: preparación iniciada; no se registró ningún fallo fatal.");
+        }
+    }
+
+    private boolean isRealFailureLine(String line) {
+        String lower = line.toLowerCase(Locale.ROOT);
+
+        // Aurora emits many diagnostic lines containing words such as "Unhandled"
+        // while successfully rendering. Android also destroys the Surface normally
+        // whenever the user returns to this launcher. Neither belongs in the error summary.
+        if (lower.contains("unhandled xf")
+                || lower.contains("unhandled bp")
+                || lower.contains("surface texture is error, dropping surface")
+                || lower.contains("skipping present; window not presentable")
+                || lower.contains("surfaceDestroyed".toLowerCase(Locale.ROOT))
+                || lower.contains("onpause")
+                || lower.contains("onstop")) {
+            return false;
+        }
+
+        return lower.contains("sigsegv")
+                || lower.contains("sigabrt")
+                || lower.contains("*** strikers android: early native load crash")
+                || lower.contains("disc validation failed")
+                || lower.contains("load failed")
+                || lower.contains("startactivity failed")
+                || lower.contains("uncaught exception")
+                || lower.contains("[error]")
+                || lower.contains("fatal error");
     }
 
     private void chooseGameImage() {
