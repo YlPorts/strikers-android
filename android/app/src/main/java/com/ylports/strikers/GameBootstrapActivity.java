@@ -10,6 +10,7 @@ import android.os.ParcelFileDescriptor;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
+import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -17,6 +18,7 @@ import android.widget.TextView;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Locale;
 
 /**
  * Runs in the private :game process before SDLActivity exists.
@@ -94,6 +96,19 @@ public final class GameBootstrapActivity extends Activity {
             Os.setenv("STRIKERS_NO_MESSAGEBOX", "1", true);
             Os.setenv("STRIKERS_CRASH_LOG", runLog.getAbsolutePath(), true);
             Os.setenv("STRIKERS_NO_CRASH_HANDLER", "1", true);
+
+            // Render natively up to 1080 rows on Android. 720p devices stay at 720p,
+            // while 1440p/4K devices present fullscreen but avoid wasting GPU time above 1080p.
+            DisplayMetrics metrics = getResources().getDisplayMetrics();
+            int shortSide = Math.min(metrics.widthPixels, metrics.heightPixels);
+            int renderRows = Math.max(448, Math.min(1080, shortSide));
+            float renderScale = renderRows / 448.0f;
+            Os.setenv("STRIKERS_RES_SCALE",
+                    String.format(Locale.US, "%.6f", renderScale), true);
+            RunLog.append(this, "bootstrap: Android render target " + renderRows
+                    + " rows (smart 1080p cap, scale="
+                    + String.format(Locale.US, "%.3f", renderScale) + "x)");
+
             RunLog.append(this, "bootstrap: native environment and early crash log exported before library load");
 
             try {
@@ -201,13 +216,27 @@ public final class GameBootstrapActivity extends Activity {
         details.setPadding(0, dp(16), 0, dp(20));
         root.addView(details);
 
-        Button back = new Button(this);
-        back.setText("Volver");
-        back.setAllCaps(false);
-        back.setOnClickListener(v -> finish());
-        root.addView(back);
+        Button chooseAnother = new Button(this);
+        chooseAnother.setText("Elegir otra ROM");
+        chooseAnother.setAllCaps(false);
+        chooseAnother.setOnClickListener(v -> forgetSavedGameAndReturnToLauncher());
+        root.addView(chooseAnother);
 
         setContentView(root);
+    }
+
+    private void forgetSavedGameAndReturnToLauncher() {
+        closeGameImageFd();
+        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE)
+                .edit()
+                .remove(MainActivity.PREF_GAME_URI)
+                .apply();
+
+        Intent launcher = new Intent();
+        launcher.setClassName(getPackageName(), getPackageName() + ".MainActivity");
+        launcher.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(launcher);
+        finish();
     }
 
     private static String safeMessage(Throwable e) {
