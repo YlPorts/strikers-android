@@ -30,6 +30,8 @@ import java.util.Locale;
  */
 public final class GameBootstrapActivity extends Activity {
     public static final String EXTRA_GAME_URI = "com.ylports.strikers.GAME_URI";
+    public static final String EXTRA_LANGUAGE = "com.ylports.strikers.LANGUAGE";
+    public static final String EXTRA_RENDER_ROWS = "com.ylports.strikers.RENDER_ROWS";
     public static final String LAST_RUN_LOG = RunLog.FILE_NAME;
 
     // Keep the descriptor alive for the lifetime of the :game process. libstrikers.so duplicates
@@ -100,10 +102,13 @@ public final class GameBootstrapActivity extends Activity {
 
             SharedPreferences prefs = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
 
-            // The European disc reads the console language through OSGetLanguage(); the
-            // port maps this environment value to that setting. USA/Japan keep their
-            // fixed disc language, matching the original game.
-            String language = prefs.getString(MainActivity.PREF_LANGUAGE, "english");
+            // MainActivity lives in a different process. Use the Intent extras for
+            // this launch so a SharedPreferences apply() cannot race the :game process;
+            // prefs remain a fallback for old launchers and remember the next UI state.
+            String language = getIntent().getStringExtra(EXTRA_LANGUAGE);
+            if (language == null || language.isEmpty()) {
+                language = prefs.getString(MainActivity.PREF_LANGUAGE, "english");
+            }
             if (language == null || language.isEmpty()) {
                 language = "english";
             }
@@ -112,7 +117,9 @@ public final class GameBootstrapActivity extends Activity {
             // Keep fullscreen output at the phone's native size while controlling only
             // the expensive internal framebuffer. 720p is the launcher default; Auto
             // follows the display but never renders above 1080 rows.
-            int requestedRows = prefs.getInt(MainActivity.PREF_RESOLUTION_ROWS, 720);
+            int requestedRows = getIntent().hasExtra(EXTRA_RENDER_ROWS)
+                    ? getIntent().getIntExtra(EXTRA_RENDER_ROWS, 720)
+                    : prefs.getInt(MainActivity.PREF_RESOLUTION_ROWS, 720);
             int renderRows;
             String resolutionMode;
             if (requestedRows <= 0) {
