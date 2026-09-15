@@ -100,6 +100,10 @@ public final class GameBootstrapActivity extends Activity {
             Os.setenv("STRIKERS_FULLSCREEN", "1", true);
             Os.setenv("STRIKERS_NO_MESSAGEBOX", "1", true);
             Os.setenv("STRIKERS_CRASH_LOG", runLog.getAbsolutePath(), true);
+            // Keep the desktop crash handler from replacing strikers_diag halfway through
+            // libstrikers.so's static constructors. The early Android handler below owns
+            // fatal signals for the entire load and writes them into the durable run log.
+            Os.setenv("STRIKERS_NO_CRASH_HANDLER", "1", true);
             RunLog.append(this, "bootstrap: native environment and early crash log exported before library load");
 
             // Install a tiny signal handler from a separate library before loading either
