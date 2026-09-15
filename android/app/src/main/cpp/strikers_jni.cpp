@@ -1,7 +1,6 @@
 #include <jni.h>
 #include <android/log.h>
 
-#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -54,11 +53,23 @@ jstring ErrorString(JNIEnv* env, const std::string& text) {
 }
 
 s8 ClampAxis(jint value) {
-    return static_cast<s8>(std::clamp(static_cast<int>(value), -127, 127));
+    int v = static_cast<int>(value);
+    if (v < -127) {
+        v = -127;
+    } else if (v > 127) {
+        v = 127;
+    }
+    return static_cast<s8>(v);
 }
 
 u8 ClampTrigger(jint value) {
-    return static_cast<u8>(std::clamp(static_cast<int>(value), 0, 255));
+    int v = static_cast<int>(value);
+    if (v < 0) {
+        v = 0;
+    } else if (v > 255) {
+        v = 255;
+    }
+    return static_cast<u8>(v);
 }
 }  // namespace
 
