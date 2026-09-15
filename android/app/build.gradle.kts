@@ -46,8 +46,8 @@ android {
         applicationId = "com.ylports.strikers"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.2-sdl-shared-bridge"
+        versionCode = 4
+        versionName = "0.2.3-early-crashdiag"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -57,7 +57,7 @@ android {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_shared")
                 cppFlags += listOf("-std=c++17")
-                targets += listOf("SDL3-shared", "strikers_android")
+                targets += listOf("SDL3-shared", "strikers_diag", "strikers_android")
             }
         }
     }
