@@ -2,6 +2,7 @@ package com.ylports.strikers;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -97,18 +98,44 @@ public final class GameBootstrapActivity extends Activity {
             Os.setenv("STRIKERS_CRASH_LOG", runLog.getAbsolutePath(), true);
             Os.setenv("STRIKERS_NO_CRASH_HANDLER", "1", true);
 
-            // Render natively up to 1080 rows on Android. 720p devices stay at 720p,
-            // while 1440p/4K devices present fullscreen but avoid wasting GPU time above 1080p.
-            DisplayMetrics metrics = getResources().getDisplayMetrics();
-            int shortSide = Math.min(metrics.widthPixels, metrics.heightPixels);
-            int renderRows = Math.max(448, Math.min(1080, shortSide));
+            SharedPreferences prefs = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
+
+            // The European disc reads the console language through OSGetLanguage(); the
+            // port maps this environment value to that setting. USA/Japan keep their
+            // fixed disc language, matching the original game.
+            String language = prefs.getString(MainActivity.PREF_LANGUAGE, "english");
+            if (language == null || language.isEmpty()) {
+                language = "english";
+            }
+            Os.setenv("STRIKERS_LANGUAGE", language, true);
+
+            // Keep fullscreen output at the phone's native size while controlling only
+            // the expensive internal framebuffer. 720p is the launcher default; Auto
+            // follows the display but never renders above 1080 rows.
+            int requestedRows = prefs.getInt(MainActivity.PREF_RESOLUTION_ROWS, 720);
+            int renderRows;
+            String resolutionMode;
+            if (requestedRows <= 0) {
+                DisplayMetrics metrics = getResources().getDisplayMetrics();
+                int shortSide = Math.min(metrics.widthPixels, metrics.heightPixels);
+                renderRows = Math.max(448, Math.min(1080, shortSide));
+                resolutionMode = "auto";
+            } else {
+                renderRows = Math.max(448, Math.min(1080, requestedRows));
+                resolutionMode = "selected";
+            }
             float renderScale = renderRows / 448.0f;
             Os.setenv("STRIKERS_RES_SCALE",
                     String.format(Locale.US, "%.6f", renderScale), true);
-            RunLog.append(this, "bootstrap: Android render target " + renderRows
-                    + " rows (smart 1080p cap, scale="
-                    + String.format(Locale.US, "%.3f", renderScale) + "x)");
 
+            // Keep the mobile defaults lightweight. These are already the PC defaults,
+            // but exporting them here prevents a stray packaged config from turning on
+            // expensive 4x MSAA on a phone.
+            Os.setenv("STRIKERS_MSAA", "1", true);
+
+            RunLog.append(this, "bootstrap: settings language=" + language
+                    + " render=" + renderRows + "p (" + resolutionMode + ", scale="
+                    + String.format(Locale.US, "%.3f", renderScale) + "x) msaa=1");
             RunLog.append(this, "bootstrap: native environment and early crash log exported before library load");
 
             try {
