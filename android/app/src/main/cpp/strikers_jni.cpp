@@ -1,12 +1,15 @@
 #include <jni.h>
 #include <android/log.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <strings.h>
 #include <unistd.h>
+
+#include <dolphin/pad.h>
 
 #include "port/disc.h"
 
@@ -48,6 +51,14 @@ int FindCommonIni(void* user, const char* path, unsigned, unsigned, int is_dir) 
 
 jstring ErrorString(JNIEnv* env, const std::string& text) {
     return env->NewStringUTF(text.c_str());
+}
+
+s8 ClampAxis(jint value) {
+    return static_cast<s8>(std::clamp(static_cast<int>(value), -127, 127));
+}
+
+u8 ClampTrigger(jint value) {
+    return static_cast<u8>(std::clamp(static_cast<int>(value), 0, 255));
 }
 }  // namespace
 
@@ -167,6 +178,27 @@ Java_com_ylports_strikers_GameBootstrapActivity_nativeBeginRunLog(
                 "Could not redirect stderr to %s",
                 path.c_str());
     }
+}
+
+// Android touch controls use Aurora's virtual-pad API rather than synthesizing
+// SDL key events. That keeps the controls on exactly the same GameCube PAD path
+// as a real controller and lets a physical controller continue to merge with it.
+extern "C" JNIEXPORT void JNICALL
+Java_com_ylports_strikers_StrikersActivity_nativeSetTouchState(
+        JNIEnv*, jclass, jint buttons, jint stick_x, jint stick_y,
+        jint substick_x, jint substick_y, jint trigger_left, jint trigger_right) {
+    PADStatus status{};
+    status.button = static_cast<u16>(buttons & 0xFFFF);
+    status.stickX = ClampAxis(stick_x);
+    status.stickY = ClampAxis(stick_y);
+    status.substickX = ClampAxis(substick_x);
+    status.substickY = ClampAxis(substick_y);
+    status.triggerLeft = ClampTrigger(trigger_left);
+    status.triggerRight = ClampTrigger(trigger_right);
+    status.analogA = (status.button & PAD_BUTTON_A) != 0 ? 255 : 0;
+    status.analogB = (status.button & PAD_BUTTON_B) != 0 ? 255 : 0;
+    status.err = PAD_ERR_NONE;
+    PADSetVirtualStatus(PAD_CHAN0, &status);
 }
 
 // Do not define JNI_OnLoad here. SDL3's Android backend owns JNI_OnLoad and uses
