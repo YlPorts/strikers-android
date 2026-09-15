@@ -469,11 +469,19 @@ static FILE* open_android_proc_fd(const char* path)
 static FILE* open_disc_stream(const char* path)
 {
 #if defined(__ANDROID__)
-    FILE* android_fd = open_android_proc_fd(path);
-    if (android_fd != NULL)
+    FILE* android_fd = NULL;
+    if (path != NULL && strncmp(path, "/proc/self/fd/", 14) == 0)
     {
-        fprintf(stderr, "[android] disc: using duplicated SAF fd for %s\n", path);
-        return android_fd;
+        android_fd = open_android_proc_fd(path);
+        if (android_fd != NULL)
+        {
+            fprintf(stderr, "[android] disc: using duplicated SAF fd for %s\n", path);
+            return android_fd;
+        }
+
+        // Do not fall through to fopen("/proc/self/fd/N") on Android. The whole point of this
+        // branch is that SAF descriptors are valid while procfs re-open is denied by the sandbox.
+        return NULL;
     }
 #endif
     return fopen(path, "rb");
