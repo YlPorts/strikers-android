@@ -59,6 +59,26 @@ jobs:
           set -o pipefail
           gradle --no-daemon -p android :app:assembleDebug --stacktrace 2>&1 | tee android-apk-build.log
 
+      - name: Collect unstripped native libraries
+        if: always()
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p android-native-debug
+          STRIKERS_SO="$(find android/app/.cxx -type f -path '*/arm64-v8a/*' -name 'libstrikers.so' -print -quit 2>/dev/null || true)"
+          SDL_SO="$(find android/app/.cxx -type f -path '*/arm64-v8a/*' -name 'libSDL3.so' -print -quit 2>/dev/null || true)"
+          if [ -n "$STRIKERS_SO" ]; then cp "$STRIKERS_SO" android-native-debug/libstrikers.so; fi
+          if [ -n "$SDL_SO" ]; then cp "$SDL_SO" android-native-debug/libSDL3.so; fi
+          ls -lh android-native-debug || true
+
+      - name: Upload unstripped native libraries
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: strikers-android-unstripped-native
+          path: android-native-debug/
+          if-no-files-found: ignore
+
       - name: Preserve APK build log
         if: always()
         uses: actions/upload-artifact@v7
