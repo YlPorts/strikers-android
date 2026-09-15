@@ -1,4 +1,5 @@
-// See include/port/disc.h for what this is and which formats it takes.
+// Reading a GameCube disc image, so the game data can be a file somebody already has. dvd.c reads
+// an extracted directory and that stays the default: it is what a release archive ships.
 
 #include "port/disc.h"
 
@@ -6,6 +7,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(__ANDROID__)
+#include <limits.h>
+#include <unistd.h>
+#endif
 
 #ifdef STRIKERS_ZLIB
 #include <zlib.h>
@@ -417,6 +423,62 @@ static void note_nkit(const unsigned char* head, size_t got)
                 "ordinary image.\n");
 }
 
+#if defined(__ANDROID__)
+// Android's Storage Access Framework gives the launcher a real, seekable file descriptor, but
+// opening /proc/self/fd/N again with fopen() is not reliable under Android's app sandbox. The Java
+// bootstrap deliberately keeps the original ParcelFileDescriptor alive for the lifetime of the
+// :game process, so duplicate that descriptor and wrap the duplicate in stdio instead of reopening
+// procfs. fclose() then owns only the duplicate; Java still owns the original descriptor.
+static FILE* open_android_proc_fd(const char* path)
+{
+    static const char prefix[] = "/proc/self/fd/";
+    char* end = NULL;
+    long value;
+    int duplicated;
+    FILE* f;
+
+    if (path == NULL || strncmp(path, prefix, sizeof prefix - 1) != 0)
+        return NULL;
+
+    value = strtol(path + sizeof prefix - 1, &end, 10);
+    if (end == path + sizeof prefix - 1 || *end != '\0' || value < 0 || value > INT_MAX)
+        return NULL;
+
+    duplicated = dup((int)value);
+    if (duplicated < 0)
+        return NULL;
+
+    f = fdopen(duplicated, "rb");
+    if (f == NULL)
+    {
+        close(duplicated);
+        return NULL;
+    }
+
+    // SAF providers may leave the descriptor positioned somewhere other than zero. Every later
+    // read seeks explicitly too, but normalising here makes the header probe deterministic.
+    if (disc_seek(f, 0) != 0)
+    {
+        fclose(f);
+        return NULL;
+    }
+    return f;
+}
+#endif
+
+static FILE* open_disc_stream(const char* path)
+{
+#if defined(__ANDROID__)
+    FILE* android_fd = open_android_proc_fd(path);
+    if (android_fd != NULL)
+    {
+        fprintf(stderr, "[android] disc: using duplicated SAF fd for %s\n", path);
+        return android_fd;
+    }
+#endif
+    return fopen(path, "rb");
+}
+
 PortDisc* port_disc_open(const char* path, char* err, size_t errsize)
 {
     unsigned char head[0x220];
@@ -431,7 +493,7 @@ PortDisc* port_disc_open(const char* path, char* err, size_t errsize)
         return NULL;
     }
 
-    d->f = fopen(path, "rb");
+    d->f = open_disc_stream(path);
     if (d->f == NULL)
     {
         snprintf(err, errsize,
@@ -509,108 +571,150 @@ static unsigned be32u(const unsigned char* p)
     return ((unsigned)p[0] << 24) | ((unsigned)p[1] << 16) | ((unsigned)p[2] << 8) | p[3];
 }
 
-// Depth of the disc's directory tree. This game's is three deep; sixteen is there so a malformed
-// FST cannot walk off the stack rather than because any disc needs it.
-#define DISC_FST_DEPTH 16
-
-static int walk_fail(unsigned char* fst, char* err, size_t errsize, const char* text)
+int port_disc_walk(PortDisc* disc, PortDiscVisit visit, void* user, char* err,
+                   size_t errsize)
 {
-    free(fst);
-    snprintf(err, errsize, "%s", text);
-    return -1;
-}
-
-int port_disc_walk(PortDisc* d, PortDiscVisit visit, void* user, char* err, size_t errsize)
-{
-    unsigned char hdr[0x440];
-    unsigned char* fst = NULL;
-    unsigned fstOff, fstSize, nent, strOff, i;
-    char dir[1024];
-    char full[1024];
-    unsigned endStack[DISC_FST_DEPTH];
-    int lenStack[DISC_FST_DEPTH];
-    int sp = 0, dirLen = 0;
+    unsigned char hdr[0x430];
+    unsigned fstOff, fstSize, count, i;
+    unsigned char* fst;
+    const char* names;
 
     err[0] = '\0';
-    if (port_disc_read(d, hdr, sizeof hdr, 0) != (long)sizeof hdr)
-        return walk_fail(fst, err, errsize, "That image is too short to hold a disc header.");
+    if (disc == NULL || visit == NULL)
+    {
+        snprintf(err, errsize, "Internal disc reader error.");
+        return -1;
+    }
+
+    if (port_disc_read(disc, hdr, sizeof hdr, 0) != (long)sizeof hdr)
+    {
+        snprintf(err, errsize, "That image ends before the GameCube disc header does.");
+        return -1;
+    }
 
     fstOff = be32u(hdr + 0x424);
     fstSize = be32u(hdr + 0x428);
-    if (fstSize < 12 || fstSize > (16u << 20))
-        return walk_fail(fst, err, errsize,
-                         "That image's file table is not a sane size, so it is "
-                         "damaged or is not a\nGameCube disc.");
+    if (fstSize < 12 || fstSize > (64u << 20))
+    {
+        snprintf(err, errsize, "The image's filesystem table size is invalid.");
+        return -1;
+    }
 
     fst = (unsigned char*)malloc(fstSize);
     if (fst == NULL)
-        return walk_fail(fst, err, errsize, "Out of memory reading that image's file table.");
-    if (port_disc_read(d, fst, fstSize, fstOff) != (long)fstSize)
-        return walk_fail(fst, err, errsize,
-                         "That image ends inside its file table: it is truncated. "
-                         "A part-downloaded\nimage looks exactly like this.");
-
-    // The entry count is read off the disc, so it is checked before it is multiplied: nent * 12 on
-    // a damaged image can wrap a 32-bit product back to a small number and walk straight past the
-    // bounds test below it.
-    nent = be32u(fst + 8);
-    if (nent == 0 || nent > fstSize / 12)
-        return walk_fail(fst, err, errsize,
-                         "That image's file table claims more entries than it "
-                         "contains. It is damaged.");
-    strOff = nent * 12;
-    if (strOff >= fstSize)
-        return walk_fail(fst, err, errsize,
-                         "That image's file table claims more entries than it "
-                         "contains. It is damaged.");
-
-    endStack[0] = nent;
-    lenStack[0] = 0;
-    dir[0] = '\0';
-
-    for (i = 1; i < nent; i++)
     {
-        const unsigned char* e = fst + (size_t)i * 12;
-        unsigned nameOff = be32u(e) & 0xFFFFFF;
-        const char* name;
-        unsigned limit;
+        snprintf(err, errsize, "Out of memory reading the disc filesystem table.");
+        return -1;
+    }
+    if (port_disc_read(disc, fst, fstSize, fstOff) != (long)fstSize)
+    {
+        free(fst);
+        snprintf(err, errsize, "The image ends inside its filesystem table.");
+        return -1;
+    }
 
-        while (sp > 0 && i >= endStack[sp])
+    if ((be32u(fst) & 0xFF000000u) == 0)
+    {
+        free(fst);
+        snprintf(err, errsize, "The root filesystem entry is not a directory.");
+        return -1;
+    }
+    count = be32u(fst + 8);
+    if (count == 0 || count > fstSize / 12)
+    {
+        free(fst);
+        snprintf(err, errsize, "The image's filesystem entry count is invalid.");
+        return -1;
+    }
+    names = (const char*)(fst + (size_t)count * 12);
+
+    // Reconstruct paths from directory end indices. The FST stores no parent index for files.
+    {
+        struct DirLevel
         {
-            dirLen = lenStack[sp];
-            dir[dirLen] = '\0';
-            sp--;
-        }
+            unsigned end;
+            size_t pathLen;
+        } stack[128];
+        unsigned depth = 0;
+        char path[2048];
+        size_t pathLen = 0;
+        path[0] = '\0';
+        stack[depth].end = count;
+        stack[depth].pathLen = 0;
+        depth++;
 
-        if (strOff + nameOff >= fstSize)
-            continue;   // a name outside the table; skip it rather than read it
-        name = (const char*)fst + strOff + nameOff;
-        for (limit = strOff + nameOff; limit < fstSize && fst[limit]; limit++)
-            ;
-        if (limit >= fstSize)
-            continue;   // unterminated name at the end of the table
-
-        if (e[0] & 1)
+        for (i = 1; i < count; i++)
         {
-            if (sp + 1 < DISC_FST_DEPTH)
+            const unsigned char* e = fst + (size_t)i * 12;
+            unsigned word = be32u(e);
+            unsigned nameOff = word & 0x00FFFFFFu;
+            int isDir = (word >> 24) != 0;
+            unsigned a = be32u(e + 4);
+            unsigned b = be32u(e + 8);
+            const char* name;
+            size_t remain, nameLen;
+
+            while (depth > 0 && i >= stack[depth - 1].end)
             {
-                sp++;
-                endStack[sp] = be32u(e + 8);
-                lenStack[sp] = dirLen;
-                dirLen += snprintf(dir + dirLen, sizeof dir - (size_t)dirLen,
-                                   "%s%s", dirLen ? "/" : "", name);
-                if (dirLen >= (int)sizeof dir)
-                    return walk_fail(fst, err, errsize,
-                                     "That image has a path too long to be this game's disc.");
-                if (visit(user, dir, 0, 0, 1) != 0)
-                    break;
+                pathLen = stack[depth - 1].pathLen;
+                path[pathLen] = '\0';
+                depth--;
             }
-            continue;
-        }
 
-        snprintf(full, sizeof full, "%s%s%s", dir, dirLen ? "/" : "", name);
-        if (visit(user, full, be32u(e + 4), be32u(e + 8), 0) != 0)
-            break;
+            if ((size_t)count * 12 + nameOff >= fstSize)
+            {
+                free(fst);
+                snprintf(err, errsize, "A filesystem name points outside the name table.");
+                return -1;
+            }
+            name = names + nameOff;
+            remain = fstSize - ((size_t)count * 12 + nameOff);
+            nameLen = strnlen(name, remain);
+            if (nameLen == remain)
+            {
+                free(fst);
+                snprintf(err, errsize, "A filesystem name is not terminated.");
+                return -1;
+            }
+
+            if (pathLen && pathLen + 1 < sizeof path)
+                path[pathLen++] = '/';
+            if (pathLen + nameLen >= sizeof path)
+            {
+                free(fst);
+                snprintf(err, errsize, "A filesystem path is too long.");
+                return -1;
+            }
+            memcpy(path + pathLen, name, nameLen);
+            pathLen += nameLen;
+            path[pathLen] = '\0';
+
+            if (visit(user, path, isDir ? 0u : a, isDir ? 0u : b, isDir) != 0)
+            {
+                free(fst);
+                return 0;
+            }
+
+            if (isDir)
+            {
+                if (b <= i || b > count || depth >= sizeof stack / sizeof stack[0])
+                {
+                    free(fst);
+                    snprintf(err, errsize, "A filesystem directory range is invalid.");
+                    return -1;
+                }
+                stack[depth].end = b;
+                stack[depth].pathLen = pathLen - nameLen - (pathLen > nameLen ? 1u : 0u);
+                depth++;
+            }
+            else
+            {
+                pathLen -= nameLen;
+                if (pathLen && path[pathLen - 1] == '/')
+                    pathLen--;
+                path[pathLen] = '\0';
+            }
+        }
     }
 
     free(fst);
