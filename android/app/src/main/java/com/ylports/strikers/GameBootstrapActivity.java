@@ -45,9 +45,6 @@ public final class GameBootstrapActivity extends Activity {
         RunLog.append(this, "bootstrap: Activity.onCreate complete");
         showPreparing("Preparando Super Mario Strikers…");
 
-        // libstrikers.so is large and has many C/C++ static initializers. Loading it
-        // on the Activity thread can cross Android's responsiveness window on slower
-        // phones. Keep the UI alive while the dynamic loader does its work.
         Thread loader = new Thread(this::prepareAndLaunch, "strikers-native-loader");
         loader.start();
     }
@@ -87,28 +84,18 @@ public final class GameBootstrapActivity extends Activity {
             }
             RunLog.append(this, "bootstrap: descriptor opened fd=" + gameImageFd.getFd());
 
-            // The disc reader performs random seeks. Cloud-only providers sometimes
-            // expose a pipe instead; reject those before loading the native runtime.
             Os.lseek(gameImageFd.getFileDescriptor(), 0, OsConstants.SEEK_SET);
             String nativePath = "/proc/self/fd/" + gameImageFd.getFd();
             RunLog.append(this, "bootstrap: descriptor is seekable; native fd bridge ready");
 
-            // Important: some Strikers/Aurora initialization can happen while the shared
-            // library is being loaded, before SDL_main. Export every variable first.
             File runLog = RunLog.file(this);
             Os.setenv("STRIKERS_DATA", nativePath, true);
             Os.setenv("STRIKERS_FULLSCREEN", "1", true);
             Os.setenv("STRIKERS_NO_MESSAGEBOX", "1", true);
             Os.setenv("STRIKERS_CRASH_LOG", runLog.getAbsolutePath(), true);
-            // Keep the desktop crash handler from replacing strikers_diag halfway through
-            // libstrikers.so's static constructors. The early Android handler below owns
-            // fatal signals for the entire load and writes them into the durable run log.
             Os.setenv("STRIKERS_NO_CRASH_HANDLER", "1", true);
             RunLog.append(this, "bootstrap: native environment and early crash log exported before library load");
 
-            // Install a tiny signal handler from a separate library before loading either
-            // SDL/Aurora or the game. If a C/C++ static initializer kills the :game process,
-            // it appends PC/LR/SP plus /proc/self/maps to the durable run log.
             try {
                 RunLog.append(this, "bootstrap: System.loadLibrary(strikers_diag) begin");
                 System.loadLibrary("strikers_diag");
