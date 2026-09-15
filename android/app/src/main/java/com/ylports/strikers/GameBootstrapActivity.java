@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.system.ErrnoException;
 import android.system.Os;
@@ -42,10 +43,20 @@ public final class GameBootstrapActivity extends Activity {
         super.onCreate(savedInstanceState);
         RunLog.append(this, "bootstrap: Activity.onCreate complete");
         showPreparing("Preparando Super Mario Strikers…");
-        prepareAndLaunch();
+
+        // libstrikers.so is large and has many C/C++ static initializers. Loading it
+        // on the Activity thread can cross Android's responsiveness window on slower
+        // phones. Keep the UI alive while the dynamic loader does its work.
+        Thread loader = new Thread(this::prepareAndLaunch, "strikers-native-loader");
+        loader.start();
     }
 
     private void showPreparing(String message) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnUiThread(() -> showPreparing(message));
+            return;
+        }
+
         RunLog.append(this, "bootstrap UI: " + message);
         TextView text = new TextView(this);
         text.setText(message);
@@ -83,10 +94,12 @@ public final class GameBootstrapActivity extends Activity {
 
             // Important: some Strikers/Aurora initialization can happen while the shared
             // library is being loaded, before SDL_main. Export every variable first.
+            File runLog = RunLog.file(this);
             Os.setenv("STRIKERS_DATA", nativePath, true);
             Os.setenv("STRIKERS_FULLSCREEN", "1", true);
             Os.setenv("STRIKERS_NO_MESSAGEBOX", "1", true);
-            RunLog.append(this, "bootstrap: native environment exported before library load");
+            Os.setenv("STRIKERS_CRASH_LOG", runLog.getAbsolutePath(), true);
+            RunLog.append(this, "bootstrap: native environment and early crash log exported before library load");
 
             showPreparing("Cargando SDL3…");
             try {
@@ -123,17 +136,25 @@ public final class GameBootstrapActivity extends Activity {
             }
             RunLog.append(this, "bootstrap: disc validation OK");
 
-            File runLog = RunLog.file(this);
             RunLog.append(this, "bootstrap: attaching native stderr to durable log");
             nativeBeginRunLog(runLog.getAbsolutePath());
             RunLog.append(this, "bootstrap: native stderr attached");
 
             Intent nativeGame = new Intent();
             nativeGame.setClassName(getPackageName(), getPackageName() + ".StrikersActivity");
-            RunLog.append(this, "bootstrap: starting StrikersActivity");
-            startActivity(nativeGame);
-            RunLog.append(this, "bootstrap: startActivity returned; finishing bootstrap");
-            finish();
+            runOnUiThread(() -> {
+                try {
+                    RunLog.append(this, "bootstrap: starting StrikersActivity");
+                    startActivity(nativeGame);
+                    RunLog.append(this, "bootstrap: startActivity returned; finishing bootstrap");
+                    finish();
+                } catch (Exception e) {
+                    RunLog.append(this, "bootstrap: startActivity failed: "
+                            + e.getClass().getSimpleName() + ": " + safeMessage(e));
+                    showError("No se pudo abrir la actividad nativa.\n\n"
+                            + e.getClass().getSimpleName() + ": " + safeMessage(e));
+                }
+            });
         } catch (ErrnoException e) {
             RunLog.append(this, "bootstrap: descriptor is not seekable: " + safeMessage(e));
             closeGameImageFd();
@@ -146,6 +167,11 @@ public final class GameBootstrapActivity extends Activity {
     }
 
     private void showError(String message) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnUiThread(() -> showError(message));
+            return;
+        }
+
         RunLog.append(this, "bootstrap: showing error screen");
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
