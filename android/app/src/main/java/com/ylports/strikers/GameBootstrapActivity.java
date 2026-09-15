@@ -29,8 +29,8 @@ public final class GameBootstrapActivity extends Activity {
     public static final String EXTRA_GAME_URI = "com.ylports.strikers.GAME_URI";
     public static final String LAST_RUN_LOG = RunLog.FILE_NAME;
 
-    // Keep the descriptor alive for the lifetime of the :game process. libstrikers.so
-    // re-opens /proc/self/fd/N and needs the underlying SAF descriptor to remain valid.
+    // Keep the descriptor alive for the lifetime of the :game process. libstrikers.so duplicates
+    // this SAF descriptor directly rather than reopening /proc/self/fd/N through Android's sandbox.
     private static ParcelFileDescriptor gameImageFd;
 
     private static native void nativeInstallCrashDiagnostics(String logPath);
@@ -91,7 +91,7 @@ public final class GameBootstrapActivity extends Activity {
             // expose a pipe instead; reject those before loading the native runtime.
             Os.lseek(gameImageFd.getFileDescriptor(), 0, OsConstants.SEEK_SET);
             String nativePath = "/proc/self/fd/" + gameImageFd.getFd();
-            RunLog.append(this, "bootstrap: descriptor is seekable; native path ready");
+            RunLog.append(this, "bootstrap: descriptor is seekable; native fd bridge ready");
 
             // Important: some Strikers/Aurora initialization can happen while the shared
             // library is being loaded, before SDL_main. Export every variable first.
@@ -146,7 +146,7 @@ public final class GameBootstrapActivity extends Activity {
             }
 
             showPreparing("Verificando imagen de Super Mario Strikers…");
-            RunLog.append(this, "bootstrap: validating disc with native reader");
+            RunLog.append(this, "bootstrap: validating disc through SAF fd bridge");
             String validationError = nativeValidateDiscPath(nativePath);
             if (validationError != null && !validationError.isEmpty()) {
                 RunLog.append(this, "bootstrap: disc validation failed: " + validationError.replace('\n', ' '));
