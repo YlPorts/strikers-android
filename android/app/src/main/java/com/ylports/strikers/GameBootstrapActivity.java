@@ -33,6 +33,7 @@ public final class GameBootstrapActivity extends Activity {
     // re-opens /proc/self/fd/N and needs the underlying SAF descriptor to remain valid.
     private static ParcelFileDescriptor gameImageFd;
 
+    private static native void nativeInstallCrashDiagnostics(String logPath);
     private static native String nativeValidateDiscPath(String nativePath);
     private static native void nativeBeginRunLog(String logPath);
 
@@ -100,6 +101,21 @@ public final class GameBootstrapActivity extends Activity {
             Os.setenv("STRIKERS_NO_MESSAGEBOX", "1", true);
             Os.setenv("STRIKERS_CRASH_LOG", runLog.getAbsolutePath(), true);
             RunLog.append(this, "bootstrap: native environment and early crash log exported before library load");
+
+            // Install a tiny signal handler from a separate library before loading either
+            // SDL/Aurora or the game. If a C/C++ static initializer kills the :game process,
+            // it appends PC/LR/SP plus /proc/self/maps to the durable run log.
+            try {
+                RunLog.append(this, "bootstrap: System.loadLibrary(strikers_diag) begin");
+                System.loadLibrary("strikers_diag");
+                nativeInstallCrashDiagnostics(runLog.getAbsolutePath());
+                RunLog.append(this, "bootstrap: early native crash diagnostics armed");
+            } catch (UnsatisfiedLinkError e) {
+                RunLog.append(this, "bootstrap: crash diagnostic library load failed: " + safeMessage(e));
+                closeGameImageFd();
+                showError("No se pudo cargar el diagnóstico nativo.\n\n" + safeMessage(e));
+                return;
+            }
 
             showPreparing("Cargando SDL3…");
             try {
