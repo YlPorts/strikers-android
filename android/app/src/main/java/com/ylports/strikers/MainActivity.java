@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -28,14 +29,30 @@ import java.util.Locale;
  */
 public final class MainActivity extends Activity {
     private static final int PICK_GAME_IMAGE = 1001;
-    private static final String PREFS = "strikers_android";
-    private static final String PREF_GAME_URI = "game_image_uri";
+    static final String PREFS = "strikers_android";
+    static final String PREF_GAME_URI = "game_image_uri";
 
     private TextView statusView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // The picker is a first-run/fallback screen. Once a persisted SAF URI exists
+        // and can still be opened, launching the app goes straight to the game.
+        String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_GAME_URI, null);
+        if (saved != null && canOpenSavedImage(saved)) {
+            if (startGame(saved, true)) {
+                finish();
+                return;
+            }
+        } else if (saved != null) {
+            getSharedPreferences(PREFS, MODE_PRIVATE)
+                    .edit()
+                    .remove(PREF_GAME_URI)
+                    .apply();
+        }
+
         setContentView(buildLauncherView());
     }
 
@@ -95,13 +112,17 @@ public final class MainActivity extends Activity {
         Button playGame = new Button(this);
         playGame.setText("Jugar");
         playGame.setAllCaps(false);
-        playGame.setOnClickListener(v -> launchGame());
+        playGame.setOnClickListener(v -> {
+            if (launchGame()) {
+                finish();
+            }
+        });
         LinearLayout.LayoutParams playParams = buttonParams();
         playParams.topMargin = dp(12);
         root.addView(playGame, playParams);
 
         TextView note = new TextView(this);
-        note.setText("El log técnico completo se conserva en disco; el launcher solo muestra fallos reales o un resumen del último arranque.");
+        note.setText("La imagen se recuerda después de elegirla. Esta pantalla solo vuelve a aparecer si cambias la ROM o Android pierde el permiso del archivo.");
         note.setTextColor(Color.rgb(125, 135, 150));
         note.setTextSize(12f);
         note.setGravity(Gravity.CENTER);
@@ -188,7 +209,7 @@ public final class MainActivity extends Activity {
                 || lower.contains("unhandled bp")
                 || lower.contains("surface texture is error, dropping surface")
                 || lower.contains("skipping present; window not presentable")
-                || lower.contains("surfaceDestroyed".toLowerCase(Locale.ROOT))
+                || lower.contains("surfacedestroyed")
                 || lower.contains("onpause")
                 || lower.contains("onstop")) {
             return false;
@@ -200,9 +221,21 @@ public final class MainActivity extends Activity {
                 || lower.contains("disc validation failed")
                 || lower.contains("load failed")
                 || lower.contains("startactivity failed")
+                || lower.contains("startactivity falló")
                 || lower.contains("uncaught exception")
                 || lower.contains("[error]")
                 || lower.contains("fatal error");
+    }
+
+    private boolean canOpenSavedImage(String saved) {
+        try (ParcelFileDescriptor descriptor =
+                     getContentResolver().openFileDescriptor(Uri.parse(saved), "r")) {
+            return descriptor != null;
+        } catch (Exception e) {
+            RunLog.append(this, "launcher: saved image is no longer accessible: "
+                    + e.getClass().getSimpleName());
+            return false;
+        }
     }
 
     private void chooseGameImage() {
@@ -239,16 +272,26 @@ public final class MainActivity extends Activity {
                 .putString(PREF_GAME_URI, image.toString())
                 .apply();
         updateStatus();
+
+        // First selection immediately becomes the normal boot path; no second "Jugar" tap.
+        if (launchGame()) {
+            finish();
+        }
     }
 
-    private void launchGame() {
+    private boolean launchGame() {
         String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_GAME_URI, null);
         if (saved == null) {
             Toast.makeText(this, "Selecciona primero tu imagen de Super Mario Strikers.", Toast.LENGTH_SHORT).show();
-            return;
+            return false;
         }
+        return startGame(saved, false);
+    }
 
-        RunLog.reset(this, "launcher: Jugar pulsado; iniciando GameBootstrapActivity");
+    private boolean startGame(String saved, boolean automatic) {
+        RunLog.reset(this, automatic
+                ? "launcher: ROM recordada válida; iniciando GameBootstrapActivity automáticamente"
+                : "launcher: iniciando GameBootstrapActivity");
 
         Intent game = new Intent();
         game.setClassName(getPackageName(), getPackageName() + ".GameBootstrapActivity");
@@ -257,9 +300,13 @@ public final class MainActivity extends Activity {
         game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
             startActivity(game);
+            return true;
         } catch (Exception e) {
-            RunLog.append(this, "launcher: startActivity falló: " + e.getClass().getSimpleName() + ": " + e.getMessage());
-            Toast.makeText(this, "No se pudo iniciar el proceso del juego: " + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
+            RunLog.append(this, "launcher: startActivity falló: " + e.getClass().getSimpleName()
+                    + ": " + e.getMessage());
+            Toast.makeText(this, "No se pudo iniciar el proceso del juego: "
+                    + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
+            return false;
         }
     }
 
