@@ -376,6 +376,11 @@ public final class MainActivity extends Activity {
         Intent game = new Intent();
         game.setClassName(getPackageName(), getPackageName() + ".GameBootstrapActivity");
         game.putExtra(GameBootstrapActivity.EXTRA_GAME_URI, saved);
+        // Pass launch-critical settings directly to the private :game process.
+        // SharedPreferences is still used to remember the UI selection, but the
+        // current launch never races an asynchronous preferences disk write.
+        game.putExtra(GameBootstrapActivity.EXTRA_LANGUAGE, language);
+        game.putExtra(GameBootstrapActivity.EXTRA_RENDER_ROWS, rows);
         game.setData(Uri.parse(saved));
         game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
