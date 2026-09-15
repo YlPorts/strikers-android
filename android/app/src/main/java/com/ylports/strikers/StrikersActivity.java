@@ -5,7 +5,10 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.hardware.input.InputManager;
 import android.os.Bundle;
+import android.util.SparseIntArray;
+import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -15,8 +18,11 @@ import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLSurface;
 
 /** Runs the native Strikers port through SDL3 and Aurora. */
-public final class StrikersActivity extends SDLActivity {
+public final class StrikersActivity extends SDLActivity
+        implements InputManager.InputDeviceListener {
     private TouchControllerView touchController;
+    private InputManager inputManager;
+    private boolean physicalGamepadConnected;
 
     private static native void nativeSetTouchState(
             int buttons,
@@ -39,6 +45,12 @@ public final class StrikersActivity extends SDLActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
         touchController.releaseAll();
+
+        inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
+        if (inputManager != null) {
+            inputManager.registerInputDeviceListener(this, null);
+        }
+        updateTouchOverlayVisibility();
         RunLog.append(this, "SDL activity: Android touch GameCube overlay installed");
     }
 
@@ -53,6 +65,7 @@ public final class StrikersActivity extends SDLActivity {
     protected void onResume() {
         RunLog.append(this, "SDL activity: onResume BEFORE super");
         super.onResume();
+        updateTouchOverlayVisibility();
         RunLog.append(this, "SDL activity: onResume AFTER super");
     }
 
@@ -79,11 +92,69 @@ public final class StrikersActivity extends SDLActivity {
     @Override
     protected void onDestroy() {
         RunLog.append(this, "SDL activity: onDestroy BEFORE super");
+        if (inputManager != null) {
+            inputManager.unregisterInputDeviceListener(this);
+            inputManager = null;
+        }
         if (touchController != null) {
             touchController.releaseAll();
         }
         super.onDestroy();
         RunLog.append(this, "SDL activity: onDestroy AFTER super");
+    }
+
+    @Override
+    public void onInputDeviceAdded(int deviceId) {
+        runOnUiThread(this::updateTouchOverlayVisibility);
+    }
+
+    @Override
+    public void onInputDeviceRemoved(int deviceId) {
+        runOnUiThread(this::updateTouchOverlayVisibility);
+    }
+
+    @Override
+    public void onInputDeviceChanged(int deviceId) {
+        runOnUiThread(this::updateTouchOverlayVisibility);
+    }
+
+    private void updateTouchOverlayVisibility() {
+        if (touchController == null) {
+            return;
+        }
+
+        boolean connected = hasPhysicalGamepad();
+        if (connected != physicalGamepadConnected) {
+            physicalGamepadConnected = connected;
+            RunLog.append(this, connected
+                    ? "SDL activity: physical gamepad connected; touch overlay hidden"
+                    : "SDL activity: physical gamepad disconnected; touch overlay restored");
+        }
+
+        if (connected) {
+            touchController.releaseAll();
+            touchController.setVisibility(View.GONE);
+        } else {
+            touchController.setVisibility(View.VISIBLE);
+            touchController.invalidate();
+        }
+    }
+
+    private boolean hasPhysicalGamepad() {
+        int[] ids = InputDevice.getDeviceIds();
+        for (int id : ids) {
+            InputDevice device = InputDevice.getDevice(id);
+            if (device == null || device.isVirtual()) {
+                continue;
+            }
+            int sources = device.getSources();
+            boolean gamepad = (sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD;
+            boolean joystick = (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+            if (gamepad || joystick) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -103,6 +174,10 @@ public final class StrikersActivity extends SDLActivity {
     /**
      * Transparent multitouch overlay. It feeds Aurora's virtual GameCube PAD instead
      * of sending keyboard events, so menus and gameplay see a normal controller.
+     *
+     * Each finger keeps a role by Android pointer ID. That avoids the common bug where
+     * pointer indexes are renumbered after one finger is lifted and another button/stick
+     * suddenly stops responding or jumps to the wrong control.
      */
     private static final class TouchControllerView extends View {
         private static final int PAD_BUTTON_LEFT = 0x0001;
@@ -118,6 +193,19 @@ public final class StrikersActivity extends SDLActivity {
         private static final int PAD_BUTTON_Y = 0x0800;
         private static final int PAD_BUTTON_START = 0x1000;
 
+        private static final int ROLE_NONE = 0;
+        private static final int ROLE_MAIN_STICK = 1;
+        private static final int ROLE_C_STICK = 2;
+        private static final int ROLE_DPAD = 3;
+        private static final int ROLE_A = 4;
+        private static final int ROLE_B = 5;
+        private static final int ROLE_X = 6;
+        private static final int ROLE_Y = 7;
+        private static final int ROLE_L = 8;
+        private static final int ROLE_R = 9;
+        private static final int ROLE_Z = 10;
+        private static final int ROLE_START = 11;
+
         private final float density;
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint outline = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -126,6 +214,7 @@ public final class StrikersActivity extends SDLActivity {
         private final RectF rRect = new RectF();
         private final RectF zRect = new RectF();
         private final RectF startRect = new RectF();
+        private final SparseIntArray pointerRoles = new SparseIntArray();
 
         private float stickCx;
         private float stickCy;
@@ -293,87 +382,27 @@ public final class StrikersActivity extends SDLActivity {
         @Override
         public boolean onTouchEvent(MotionEvent event) {
             int action = event.getActionMasked();
-            if (action == MotionEvent.ACTION_CANCEL) {
+            if (action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_OUTSIDE) {
                 releaseAll();
                 return true;
             }
 
-            int liftedIndex = (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
-                    ? event.getActionIndex() : -1;
-
-            int newButtons = 0;
-            int newStickX = 0;
-            int newStickY = 0;
-            int newSubstickX = 0;
-            int newSubstickY = 0;
-            int newTriggerLeft = 0;
-            int newTriggerRight = 0;
-
-            for (int i = 0; i < event.getPointerCount(); i++) {
-                if (i == liftedIndex) {
-                    continue;
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+                int index = event.getActionIndex();
+                int pointerId = event.getPointerId(index);
+                int role = roleForPoint(event.getX(index), event.getY(index));
+                if (role != ROLE_NONE) {
+                    pointerRoles.put(pointerId, role);
                 }
-
-                float px = event.getX(i);
-                float py = event.getY(i);
-
-                float[] main = axisForPoint(px, py, stickCx, stickCy, stickRadius * 1.28f);
-                if (main != null) {
-                    newStickX = Math.round(main[0] * 127f);
-                    newStickY = Math.round(-main[1] * 127f);
-                }
-
-                float[] c = axisForPoint(px, py, cStickCx, cStickCy, cStickRadius * 1.32f);
-                if (c != null) {
-                    newSubstickX = Math.round(c[0] * 127f);
-                    newSubstickY = Math.round(-c[1] * 127f);
-                }
-
-                if (insideCircle(px, py, aX, aY, faceRadius * 1.20f)) {
-                    newButtons |= PAD_BUTTON_A;
-                }
-                if (insideCircle(px, py, bX, bY, faceRadius * 1.05f)) {
-                    newButtons |= PAD_BUTTON_B;
-                }
-                if (insideCircle(px, py, xX, xY, faceRadius * 1.03f)) {
-                    newButtons |= PAD_BUTTON_X;
-                }
-                if (insideCircle(px, py, yX, yY, faceRadius * 1.03f)) {
-                    newButtons |= PAD_BUTTON_Y;
-                }
-
-                float dpadHit = dpadStep * 0.64f;
-                if (insideCircle(px, py, dpadCx - dpadStep, dpadCy, dpadHit)) {
-                    newButtons |= PAD_BUTTON_LEFT;
-                }
-                if (insideCircle(px, py, dpadCx + dpadStep, dpadCy, dpadHit)) {
-                    newButtons |= PAD_BUTTON_RIGHT;
-                }
-                if (insideCircle(px, py, dpadCx, dpadCy - dpadStep, dpadHit)) {
-                    newButtons |= PAD_BUTTON_UP;
-                }
-                if (insideCircle(px, py, dpadCx, dpadCy + dpadStep, dpadHit)) {
-                    newButtons |= PAD_BUTTON_DOWN;
-                }
-
-                if (lRect.contains(px, py)) {
-                    newButtons |= PAD_TRIGGER_L;
-                    newTriggerLeft = 180;
-                }
-                if (rRect.contains(px, py)) {
-                    newButtons |= PAD_TRIGGER_R;
-                    newTriggerRight = 180;
-                }
-                if (zRect.contains(px, py)) {
-                    newButtons |= PAD_TRIGGER_Z;
-                }
-                if (startRect.contains(px, py)) {
-                    newButtons |= PAD_BUTTON_START;
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
+                int index = event.getActionIndex();
+                pointerRoles.delete(event.getPointerId(index));
+                if (action == MotionEvent.ACTION_UP) {
+                    performClick();
                 }
             }
 
-            setState(newButtons, newStickX, newStickY, newSubstickX, newSubstickY,
-                    newTriggerLeft, newTriggerRight);
+            rebuildState(event);
             return true;
         }
 
@@ -384,7 +413,120 @@ public final class StrikersActivity extends SDLActivity {
         }
 
         void releaseAll() {
+            pointerRoles.clear();
             setState(0, 0, 0, 0, 0, 0, 0);
+        }
+
+        private int roleForPoint(float px, float py) {
+            if (lRect.contains(px, py)) return ROLE_L;
+            if (rRect.contains(px, py)) return ROLE_R;
+            if (zRect.contains(px, py)) return ROLE_Z;
+            if (startRect.contains(px, py)) return ROLE_START;
+
+            if (insideCircle(px, py, aX, aY, faceRadius * 1.20f)) return ROLE_A;
+            if (insideCircle(px, py, bX, bY, faceRadius * 1.08f)) return ROLE_B;
+            if (insideCircle(px, py, xX, xY, faceRadius * 1.06f)) return ROLE_X;
+            if (insideCircle(px, py, yX, yY, faceRadius * 1.06f)) return ROLE_Y;
+
+            float dpadHit = dpadStep * 0.74f;
+            if (insideCircle(px, py, dpadCx - dpadStep, dpadCy, dpadHit)
+                    || insideCircle(px, py, dpadCx + dpadStep, dpadCy, dpadHit)
+                    || insideCircle(px, py, dpadCx, dpadCy - dpadStep, dpadHit)
+                    || insideCircle(px, py, dpadCx, dpadCy + dpadStep, dpadHit)) {
+                return ROLE_DPAD;
+            }
+
+            if (insideCircle(px, py, stickCx, stickCy, stickRadius * 1.28f)) {
+                return ROLE_MAIN_STICK;
+            }
+            if (insideCircle(px, py, cStickCx, cStickCy, cStickRadius * 1.34f)) {
+                return ROLE_C_STICK;
+            }
+            return ROLE_NONE;
+        }
+
+        private void rebuildState(MotionEvent event) {
+            int newButtons = 0;
+            int newStickX = 0;
+            int newStickY = 0;
+            int newSubstickX = 0;
+            int newSubstickY = 0;
+            int newTriggerLeft = 0;
+            int newTriggerRight = 0;
+
+            for (int i = 0; i < event.getPointerCount(); i++) {
+                int pointerId = event.getPointerId(i);
+                int role = pointerRoles.get(pointerId, ROLE_NONE);
+                if (role == ROLE_NONE) {
+                    continue;
+                }
+
+                float px = event.getX(i);
+                float py = event.getY(i);
+                switch (role) {
+                    case ROLE_MAIN_STICK: {
+                        float[] axis = axisForAssignedPoint(px, py, stickCx, stickCy,
+                                stickRadius * 0.92f);
+                        newStickX = Math.round(axis[0] * 127f);
+                        newStickY = Math.round(-axis[1] * 127f);
+                        break;
+                    }
+                    case ROLE_C_STICK: {
+                        float[] axis = axisForAssignedPoint(px, py, cStickCx, cStickCy,
+                                cStickRadius * 0.92f);
+                        newSubstickX = Math.round(axis[0] * 127f);
+                        newSubstickY = Math.round(-axis[1] * 127f);
+                        break;
+                    }
+                    case ROLE_DPAD:
+                        newButtons |= dpadForPoint(px, py);
+                        break;
+                    case ROLE_A:
+                        newButtons |= PAD_BUTTON_A;
+                        break;
+                    case ROLE_B:
+                        newButtons |= PAD_BUTTON_B;
+                        break;
+                    case ROLE_X:
+                        newButtons |= PAD_BUTTON_X;
+                        break;
+                    case ROLE_Y:
+                        newButtons |= PAD_BUTTON_Y;
+                        break;
+                    case ROLE_L:
+                        newButtons |= PAD_TRIGGER_L;
+                        newTriggerLeft = 180;
+                        break;
+                    case ROLE_R:
+                        newButtons |= PAD_TRIGGER_R;
+                        newTriggerRight = 180;
+                        break;
+                    case ROLE_Z:
+                        newButtons |= PAD_TRIGGER_Z;
+                        break;
+                    case ROLE_START:
+                        newButtons |= PAD_BUTTON_START;
+                        break;
+                    default:
+                        break;
+                }
+            }
+
+            setState(newButtons, newStickX, newStickY, newSubstickX, newSubstickY,
+                    newTriggerLeft, newTriggerRight);
+        }
+
+        private int dpadForPoint(float px, float py) {
+            float dx = px - dpadCx;
+            float dy = py - dpadCy;
+            float dead = dpadStep * 0.28f;
+            if (Math.abs(dx) < dead && Math.abs(dy) < dead) {
+                return 0;
+            }
+            if (Math.abs(dx) > Math.abs(dy)) {
+                return dx < 0f ? PAD_BUTTON_LEFT : PAD_BUTTON_RIGHT;
+            }
+            return dy < 0f ? PAD_BUTTON_UP : PAD_BUTTON_DOWN;
         }
 
         private void setState(int newButtons, int newStickX, int newStickY,
@@ -403,19 +545,19 @@ public final class StrikersActivity extends SDLActivity {
             invalidate();
         }
 
-        private float[] axisForPoint(float px, float py, float cx, float cy, float hitRadius) {
+        private static float[] axisForAssignedPoint(float px, float py, float cx, float cy,
+                                                     float travelRadius) {
             float dx = px - cx;
             float dy = py - cy;
             float distance = (float) Math.hypot(dx, dy);
-            if (distance > hitRadius) {
-                return null;
+            if (distance > travelRadius && distance > 0f) {
+                float scale = travelRadius / distance;
+                dx *= scale;
+                dy *= scale;
             }
-            float scale = distance > hitRadius * 0.78f && distance > 0f
-                    ? (hitRadius * 0.78f / distance) : 1f;
-            float denom = hitRadius * 0.78f;
             return new float[] {
-                    clamp(dx * scale / denom, -1f, 1f),
-                    clamp(dy * scale / denom, -1f, 1f)
+                    clamp(dx / travelRadius, -1f, 1f),
+                    clamp(dy / travelRadius, -1f, 1f)
             };
         }
 
