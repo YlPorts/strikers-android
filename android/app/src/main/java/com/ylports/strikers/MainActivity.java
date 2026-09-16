@@ -79,7 +79,7 @@ public final class MainActivity extends Activity {
                 ScrollView.LayoutParams.WRAP_CONTENT));
 
         TextView title = new TextView(this);
-        title.setText("Strikers Android");
+        title.setText("StrikersAndroid");
         title.setTextColor(Color.WHITE);
         title.setTextSize(30f);
         title.setGravity(Gravity.CENTER);
