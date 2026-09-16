@@ -18,6 +18,15 @@ class GCFile;
 
 void nlReadAsyncToVirtualMemory(nlFile* file, void* buffer, int size, ReadAsyncCallback callback, uintptr_t param, unsigned long chunkSize, void* userData);
 void nlAsyncLoadFileToVirtualMemory(nlFile* file, int size, void* buffer, ReadAsyncCallback callback, uintptr_t alignment);
+#if defined(__ANDROID__)
+// Android's NIS/cinematic loader uses a deterministic blocking read into the final
+// destination. The original async path can finish after a NIS reset and write into
+// a scratch buffer that has already been reused by the next cinematic.
+void nlAsyncLoadFileToVirtualMemoryAndroidSafe(nlFile* file, int size, void* buffer, ReadAsyncCallback callback, uintptr_t alignment);
+#if !defined(NLFILEGC_IMPLEMENTATION)
+#define nlAsyncLoadFileToVirtualMemory nlAsyncLoadFileToVirtualMemoryAndroidSafe
+#endif
+#endif
 void nlCancelPendingAsyncReads(nlFile* pFile, void (*callback)(nlFile*, void*, unsigned int, uintptr_t, void (*)(nlFile*, void*, unsigned int, uintptr_t)));
 bool nlAsyncReadsPending(nlFile* file);
 void* nlLoadEntireFileToVirtualMemory(const char* fileName, int* size, unsigned int transferSize, void* target, eAllocType allocType);
