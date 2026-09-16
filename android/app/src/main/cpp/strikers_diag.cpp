@@ -1,6 +1,5 @@
 #include <jni.h>
 
-#include <execinfo.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdint.h>
@@ -176,14 +175,7 @@ static void native_crash_handler(int sig, siginfo_t* info, void* context)
         }
 
         dump_registers(fd, reinterpret_cast<const ucontext_t*>(context));
-
-        write_literal(fd, "--- backtrace ---\n");
-        void* frames[64];
-        const int frame_count = backtrace(frames, 64);
-        if (frame_count > 0)
-            backtrace_symbols_fd(frames, frame_count, fd);
-        write_literal(fd, "--- end backtrace ---\n");
-
+        write_literal(fd, "note=Android debuggerd/ApplicationExitInfo keeps the system native tombstone; PC/LR can be resolved against the maps below.\n");
         dump_proc_maps(fd);
         fsync(fd);
         close(fd);
