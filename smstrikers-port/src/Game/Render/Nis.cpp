@@ -69,7 +69,6 @@ Nis::Nis(NisHeader& header, char* data, int size)
     int numAnimations = 0;
     while (chunk != end)
     {
-        // PORT: the file is big-endian and each animation converts its own subtree, so read the header rather than trusting it.
         const u32 uChunkID = port_be32(&chunk->m_ID) & 0x80FFFFFF;
         const u32 uChunkSize = port_be32(&chunk->m_Size);
 
@@ -121,14 +120,13 @@ Nis::Nis(NisHeader& header, char* data, int size)
             }
             else
             {
-                OSReport("[nis] skipping unusable character animation %d in %s (slot=%d anim=%p)\n",
-                         numAnimations, mHeader->name, i, anim);
+                OSReport("[nis] skipping unusable character animation %d in %s (slot=%d)\n",
+                         numAnimations, mHeader->name, i);
             }
             numAnimations++;
         }
         if (uChunkID == 0x80015501)
         {
-            // PORT: nothing else owns these; a chunk the converter refuses would be walked out of bounds.
             if (port_cam_swap(chunk, uChunkSize + 8) == 0)
             {
                 OSReport("Error: NIS camera %lu is not well-formed; skipped\n", (unsigned long)mNumCameras);
@@ -378,7 +376,7 @@ void Nis::Trigger::FireEffect(const Nis& nis) const
 {
     if (name == NULL || target == NULL)
     {
-        OSReport("[nis] skipping malformed effect trigger (name=%p target=%p)\n", name, target);
+        OSReport("[nis] skipping malformed effect trigger: missing name/target\n");
         return;
     }
 
@@ -490,7 +488,7 @@ void Nis::Trigger::Fire(Nis& nis) const
     {
     case NIS_TRIGGER_TYPE_PLAY_SOUND:
     {
-        uintptr_t index;   /* PORT: may hold an SFXEmitter* */
+        uintptr_t index;
         bool isEmitter;
         bool stopAtNisEnd;
         float volume = params.float1;
@@ -502,7 +500,7 @@ void Nis::Trigger::Fire(Nis& nis) const
 
         if (name == NULL || target == NULL)
         {
-            OSReport("[nis] skipping malformed sound trigger (name=%p target=%p)\n", name, target);
+            OSReport("[nis] skipping malformed sound trigger: missing name/target\n");
             break;
         }
 
@@ -551,7 +549,12 @@ void Nis::Trigger::Fire(Nis& nis) const
 
     case NIS_TRIGGER_TYPE_PLAY_RANDOM_DIALOGUE:
     {
-        uintptr_t index;   /* PORT: may hold an SFXEmitter* */
+        if (name == NULL)
+        {
+            OSReport("[nis] skipping random dialogue: missing trigger name\n");
+            break;
+        }
+        uintptr_t index;
         bool stopAtNisEnd;
         unsigned long soundType = (unsigned long)-1;
         const int audioIndex = nis.mAudioCharacterIndex;
@@ -575,7 +578,8 @@ void Nis::Trigger::Fire(Nis& nis) const
     }
 
     case NIS_TRIGGER_TYPE_STOP_SOUND:
-        nis.StopNisAudio(NIS_AUDIO_TYPE_SFX, name);
+        if (name != NULL)
+            nis.StopNisAudio(NIS_AUDIO_TYPE_SFX, name);
         break;
 
     case NIS_TRIGGER_TYPE_PLAY_STREAM:
