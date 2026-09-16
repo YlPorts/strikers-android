@@ -16,12 +16,6 @@ set(AURORA_DAWN_LINKAGE static CACHE STRING "" FORCE)
 set(STRIKERS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../smstrikers-port")
 add_subdirectory("${STRIKERS_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/strikers-core" EXCLUDE_FROM_ALL)
 
-# nlFileGC.cpp owns the original async loader symbol. Other Android translation
-# units remap NIS reads to the safe cinematic loader declared in nlFileGC.h.
-set_property(SOURCE "${STRIKERS_ROOT}/src/NL/nlFileGC.cpp"
-    TARGET_DIRECTORY strikers_game
-    APPEND PROPERTY COMPILE_DEFINITIONS NLFILEGC_IMPLEMENTATION=1)
-
 # Harden the NIS runtime only on Android: bounds-check character/effect targets,
 # malformed chunks and trigger/audio teardown while keeping all cinematics enabled.
 include("${CMAKE_CURRENT_LIST_DIR}/NisAndroidGuard.cmake")
@@ -89,7 +83,6 @@ add_library(strikers_android SHARED
     android_early_crash_probe.c
     android_sdl_mutex_shim.c
     animation_missing_shim.c
-    cinematic_io_shim.cpp
     gx_efb_shim.cpp
     stats_gatherer_shim.cpp
 )
