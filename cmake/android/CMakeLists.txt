@@ -22,6 +22,10 @@ set_property(SOURCE "${STRIKERS_ROOT}/src/NL/nlFileGC.cpp"
     TARGET_DIRECTORY strikers_game
     APPEND PROPERTY COMPILE_DEFINITIONS NLFILEGC_IMPLEMENTATION=1)
 
+# Harden the NIS runtime only on Android: bounds-check character/effect targets,
+# malformed chunks and trigger/audio teardown while keeping all cinematics enabled.
+include("${CMAKE_CURRENT_LIST_DIR}/NisAndroidGuard.cmake")
+
 # SDLActivity owns JNI_OnLoad on Android. Aurora still needs SDL's private
 # Android activity-mutex helpers while presenting, so expose only a tiny bridge
 # from the shared SDL3 library. The game itself is linked against SDL3-shared
