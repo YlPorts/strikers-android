@@ -232,7 +232,7 @@ void Nis::SelectCamera(cAnimCamera& camera, int cameraIndex)
         camera.m_Mirror = (nlVector3) { 1.0f, 1.0f, 1.0f };
     }
 
-    mCamera.m_fAnimationTime = 0.0f;
+    camera.m_fAnimationTime = 0.0f;
     camera.BuildAnimViewMatrix(camera.m_matView);
 
     if (strstr(mHeader->name, "cup") != NULL)
