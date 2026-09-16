@@ -2,6 +2,7 @@ package com.ylports.strikers;
 
 import android.app.Activity;
 import android.app.Application;
+import android.os.Build;
 import android.os.Bundle;
 
 /** Keeps the launcher alive and surfaces the most recent :game process crash. */
@@ -16,7 +17,7 @@ public final class DiagnosticApplication extends Application
 
     @Override
     public void onActivityResumed(Activity activity) {
-        if (activity instanceof MainActivity) {
+        if (Build.VERSION.SDK_INT >= 30 && activity instanceof MainActivity) {
             CrashReport.scheduleCheck(activity);
         }
     }
