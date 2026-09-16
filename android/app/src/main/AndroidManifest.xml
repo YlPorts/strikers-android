@@ -12,10 +12,11 @@
         android:extractNativeLibs="false"
         android:hardwareAccelerated="true"
         android:hasFragileUserData="true"
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher"
         android:label="Strikers Android"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
-        <!-- Pure Java launcher. Keep it in the default process so native crashes cannot kill it. -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -25,7 +26,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Opens the SAF image and prepares STRIKERS_DATA before SDL is loaded. -->
         <activity
             android:name=".GameBootstrapActivity"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
@@ -35,7 +35,6 @@
             android:screenOrientation="sensorLandscape"
             android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
 
-        <!-- Native SDL/Aurora activity, isolated from the launcher in the same :game process. -->
         <activity
             android:name=".StrikersActivity"
             android:configChanges="colorMode|density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"

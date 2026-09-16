@@ -46,8 +46,8 @@ android {
         applicationId = "com.ylports.strikers"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.2.4-touchperf"
+        versionCode = 100
+        versionName = "1.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -67,9 +67,6 @@ android {
             isJniDebuggable = true
         }
         release {
-            // CI distributes this release-optimised variant for play testing.
-            // Debug signing keeps it directly installable without changing the
-            // package name while C/C++ still receives the Release build type.
             isDebuggable = false
             isJniDebuggable = false
             isMinifyEnabled = false
