@@ -9,11 +9,10 @@ set(_nis_generated "${CMAKE_CURRENT_BINARY_DIR}/Nis_android_guarded.cpp")
 file(READ "${_nis_original}" _nis_source)
 
 function(_strikers_nis_replace _label _needle _replacement)
-    string(FIND "${_nis_source}" "${_needle}" _pos)
-    if(_pos EQUAL -1)
+    string(REPLACE "${_needle}" "${_replacement}" _patched "${_nis_source}")
+    if(_patched STREQUAL _nis_source)
         message(FATAL_ERROR "NIS Android patch '${_label}' no longer matches Nis.cpp")
     endif()
-    string(REPLACE "${_needle}" "${_replacement}" _patched "${_nis_source}")
     set(_nis_source "${_patched}" PARENT_SCOPE)
 endfunction()
 
@@ -42,20 +41,6 @@ set(_replacement [=[        const u32 uChunkID = port_be32(&chunk->m_ID) & 0x80F
 
         if (uChunkID == 0x80017000)]=])
 _strikers_nis_replace("chunk-bounds" "${_needle}" "${_replacement}")
-
-# TargetToIndex can legitimately map a later animation outside the ten render
-# slots. The old code indexed mCharacterControllers before checking the value.
-set(_needle [=[            if (mCharacterControllers[i] != NULL)]=])
-set(_replacement [=[            if (i < 0 || i >= MAX_NUM_CHARACTERS || mCharacterControllers[i] != NULL)]=])
-_strikers_nis_replace("character-slot-bounds" "${_needle}" "${_replacement}")
-
-set(_needle [=[            if (i < 10)
-            {
-                mBallId[i] = numAnimations;]=])
-set(_replacement [=[            if (i >= 0 && i < MAX_NUM_CHARACTERS && anim != NULL)
-            {
-                mBallId[i] = numAnimations;]=])
-_strikers_nis_replace("animation-slot-final" "${_needle}" "${_replacement}")
 
 set(_needle [=[        if (mCharacterControllers[i] == NULL)
             continue;]=])
