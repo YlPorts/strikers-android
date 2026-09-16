@@ -1020,7 +1020,7 @@ static size_t load_pipeline_cache_entries(ShaderType type, uint32_t configVersio
   }
   ret = sqlite3_bind_int(g_pipelineCacheLoadStmt, 2, static_cast<int>(configVersion));
   if (ret != SQLITE_OK) {
-    Log.error("Failed to bind pipeline cache config version: {}", sqlite3_errmsg(g_pipelineCacheDb));
+    Log.error("Failed to bind pipeline cache load config version: {}", sqlite3_errmsg(g_pipelineCacheDb));
     pipeline_cache_abort();
     return 0;
   }
@@ -1106,16 +1106,7 @@ PipelineRef find_pipeline(ShaderType type, const clear::PipelineConfig& config, 
 
 template <>
 PipelineRef find_pipeline(ShaderType type, const gx::PipelineConfig& config, NewPipelineCallback&& cb) {
-#if defined(__ANDROID__)
-  // The desktop renderer deliberately skips a draw while a new GX pipeline is
-  // compiling. On a stadium that looks like pieces of the geometry loading in
-  // over several frames. Mobile blocks only on first use instead: a short hitch
-  // is preferable to rendering an incomplete field, and the pipeline is cached
-  // for subsequent uses.
-  return find_pipeline_impl(type, config, std::move(cb), PipelinePriority::Blocking);
-#else
   return find_pipeline_impl(type, config, std::move(cb));
-#endif
 }
 
 #ifdef AURORA_ENABLE_RMLUI
