@@ -1,14 +1,11 @@
 /*
  * Android-only early loader diagnostics.
  *
- * libstrikers.so has a large C/C++ static-initializer set.  Java cannot catch a
- * SIGSEGV/SIGABRT raised while System.loadLibrary() is running, and the normal
- * Strikers crash handler used to be installed only after many of those
- * initializers had already executed.  This constructor is given a low priority
- * so it runs before normal global constructors, redirects stderr to the durable
- * launcher log, and installs a temporary signal handler.  The regular port
- * crash handler may replace it later once library loading is safely past the
- * dangerous early phase.
+ * libstrikers.so has a large C/C++ static-initializer set. Java cannot catch a
+ * SIGSEGV/SIGABRT raised while System.loadLibrary() is running, so this probe
+ * redirects stderr early. Normal builds also install a small fallback signal
+ * handler. Diagnostic builds deliberately keep the richer strikers_diag handler
+ * that was armed by GameBootstrapActivity before libstrikers.so was loaded.
  */
 
 #if defined(__ANDROID__)
@@ -45,8 +42,6 @@ static void strikers_early_crash_handler(int sig)
     write(STDERR_FILENO, name, strlen(name));
     write(STDERR_FILENO, suffix, strlen(suffix));
 
-    /* Match the port's normal crash logger: raw addresses are enough to
-       symbolize against the unstripped CI artifact. */
     void* frames[64];
     int count = backtrace(frames, 64);
     if (count > 0)
@@ -72,6 +67,19 @@ __attribute__((constructor(101))) static void strikers_android_early_probe(void)
             write(STDERR_FILENO, marker, sizeof(marker) - 1);
             fsync(STDERR_FILENO);
         }
+    }
+
+    /* GameBootstrapActivity has already loaded strikers_diag in the dedicated
+       diagnostic APK. Do not replace its SA_SIGINFO handler: it records the
+       original fault address/registers/backtrace and then lets Android create a
+       genuine REASON_CRASH_NATIVE record for the :game process. */
+    const char* diagnostic = getenv("STRIKERS_DIAGNOSTIC_BUILD");
+    if (diagnostic != NULL && diagnostic[0] == '1') {
+        static const char marker[] =
+            "[android] diagnostic build: keeping strikers_diag crash handler armed\n";
+        write(STDERR_FILENO, marker, sizeof(marker) - 1);
+        fsync(STDERR_FILENO);
+        return;
     }
 
     stack_t ss;
