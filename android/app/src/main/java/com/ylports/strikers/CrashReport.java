@@ -162,7 +162,6 @@ final class CrashReport {
             case ApplicationExitInfo.REASON_CRASH_NATIVE: return "CRASH_NATIVE";
             case ApplicationExitInfo.REASON_ANR: return "ANR";
             case ApplicationExitInfo.REASON_INITIALIZATION_FAILURE: return "INITIALIZATION_FAILURE";
-            case ApplicationExitInfo.REASON_PERMISSION_CHANGE: return "PERMISSION_CHANGE";
             case ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE: return "EXCESSIVE_RESOURCE_USAGE";
             case ApplicationExitInfo.REASON_USER_REQUESTED: return "USER_REQUESTED";
             case ApplicationExitInfo.REASON_DEPENDENCY_DIED: return "DEPENDENCY_DIED";
