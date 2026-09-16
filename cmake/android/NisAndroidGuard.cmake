@@ -42,6 +42,51 @@ set(_replacement [=[        const u32 uChunkID = port_be32(&chunk->m_ID) & 0x80F
         if (uChunkID == 0x80017000)]=])
 _strikers_nis_replace("chunk-bounds" "${_needle}" "${_replacement}")
 
+# TargetToIndex may yield a slot outside the ten render-character slots for a
+# specific NIS. The retail code probes the array before its later i < 10 guard.
+# Try the same captain fallbacks, but never index the array until the slot is valid.
+set(_needle [=[            NisPlayer* player = NisPlayer::Instance();
+            player->mGoalScorerCharIndex = -1;
+            if (mCharacterControllers[i] != NULL)
+            {
+                i = NisPlayer::Instance()->TargetToIndex(NIS_TARGET_HOME_CAPTAIN, numAnimations, mWinnerType);
+            }
+            if (mCharacterControllers[i] != NULL)
+            {
+                i = NisPlayer::Instance()->TargetToIndex(NIS_TARGET_AWAY_CAPTAIN, numAnimations, mWinnerType);
+            }
+            if (mCharacterControllers[i] != NULL)
+            {
+                for (i = 0; i < 10; i++)
+                {
+                    if (mCharacterControllers[i] == NULL)
+                        break;
+                }
+            }
+            if (i < 10)
+            {]=])
+set(_replacement [=[            NisPlayer* player = NisPlayer::Instance();
+            player->mGoalScorerCharIndex = -1;
+            if (i < 0 || i >= MAX_NUM_CHARACTERS || mCharacterControllers[i] != NULL)
+            {
+                i = NisPlayer::Instance()->TargetToIndex(NIS_TARGET_HOME_CAPTAIN, numAnimations, mWinnerType);
+            }
+            if (i < 0 || i >= MAX_NUM_CHARACTERS || mCharacterControllers[i] != NULL)
+            {
+                i = NisPlayer::Instance()->TargetToIndex(NIS_TARGET_AWAY_CAPTAIN, numAnimations, mWinnerType);
+            }
+            if (i < 0 || i >= MAX_NUM_CHARACTERS || mCharacterControllers[i] != NULL)
+            {
+                for (i = 0; i < MAX_NUM_CHARACTERS; i++)
+                {
+                    if (mCharacterControllers[i] == NULL)
+                        break;
+                }
+            }
+            if (i >= 0 && i < MAX_NUM_CHARACTERS)
+            {]=])
+_strikers_nis_replace("character-slot-mapping" "${_needle}" "${_replacement}")
+
 set(_needle [=[        if (mCharacterControllers[i] == NULL)
             continue;]=])
 set(_replacement [=[        if (mCharacterControllers[i] == NULL || mCharacterControllers[i]->m_pSAnim == NULL)
