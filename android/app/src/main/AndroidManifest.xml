@@ -8,6 +8,7 @@
         android:required="false" />
 
     <application
+        android:name=".DiagnosticApplication"
         android:allowBackup="false"
         android:extractNativeLibs="false"
         android:hardwareAccelerated="true"

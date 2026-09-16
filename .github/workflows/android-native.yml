@@ -27,6 +27,49 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Patch random dialogue bounds
+        shell: bash
+        run: python3 cmake/android/patch_character_audio_random_dialogue.py
+
+      - name: Instrument NIS trigger callbacks
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('smstrikers-port/src/Game/Render/Nis.cpp')
+          source = path.read_text()
+          needle = "                mTriggers[i].Fire(*this);"
+          replacement = (
+              "                OSReport(\"[nistrig] BEGIN nis=%s i=%d type=%d frame=%.1f norm=%.4f old=%.4f new=%.4f name=%s target=%s p1=%lu p2=%lu p3=%lu p4=%lu f1=%.3f\\\\n\",\n"
+              "                         mHeader != NULL ? mHeader->name : \"(unknown)\",\n"
+              "                         i,\n"
+              "                         (int)mTriggers[i].type,\n"
+              "                         (double)mTriggers[i].frameNumber,\n"
+              "                         (double)triggerFrame,\n"
+              "                         (double)oldTime,\n"
+              "                         (double)newTime,\n"
+              "                         mTriggers[i].name != NULL ? mTriggers[i].name : \"(null)\",\n"
+              "                         mTriggers[i].target != NULL ? mTriggers[i].target : \"(null)\",\n"
+              "                         (unsigned long)mTriggers[i].params.param1,\n"
+              "                         (unsigned long)mTriggers[i].params.param2,\n"
+              "                         (unsigned long)mTriggers[i].params.param3,\n"
+              "                         (unsigned long)mTriggers[i].params.param4,\n"
+              "                         (double)mTriggers[i].params.float1);\n"
+              "                mTriggers[i].Fire(*this);\n"
+              "                OSReport(\"[nistrig] END nis=%s i=%d type=%d frame=%.1f name=%s target=%s\\\\n\",\n"
+              "                         mHeader != NULL ? mHeader->name : \"(unknown)\",\n"
+              "                         i,\n"
+              "                         (int)mTriggers[i].type,\n"
+              "                         (double)mTriggers[i].frameNumber,\n"
+              "                         mTriggers[i].name != NULL ? mTriggers[i].name : \"(null)\",\n"
+              "                         mTriggers[i].target != NULL ? mTriggers[i].target : \"(null)\");"
+          )
+          if source.count(needle) != 1:
+              raise SystemExit(f'Expected one UpdateTriggers Fire call, found {source.count(needle)}')
+          path.write_text(source.replace(needle, replacement, 1))
+          PY
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -101,6 +144,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Patch random dialogue bounds
+        shell: bash
+        run: python3 cmake/android/patch_character_audio_random_dialogue.py
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
