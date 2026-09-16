@@ -25,6 +25,17 @@ namespace
 {
 static unsigned char useAsyncLoading = true;
 static char kNisEmpty[] = "";
+#if defined(__ANDROID__)
+// Match intros/outros can queue several NIS clips at once. The retail 0x70800-byte
+// double buffer is tight enough that larger character cinematics can collide when
+// the whole match working set stays resident on Android. Keep the same async model,
+// but give cinematics their own small 4 MiB window instead of falling back to map
+// streaming or synchronous loads.
+static const int kNisMemorySize = 0x400000;
+#else
+static const int kNisMemorySize = 0x70800;
+#endif
+static const int kNisAlignmentSlack = 0x20;
 } // namespace
 
 #include "NisPlayer_interp.cpp"
@@ -63,13 +74,13 @@ NisPlayer::NisPlayer()
     , mMaxNumBallsVisible(1)
     , mLoadingFromBack(false)
     , mUsedFromFront(0)
-    , mUsedFromBack(0x70800)
+    , mUsedFromBack(kNisMemorySize)
     , mGoalScorerCharIndex(-1)
 {
     if (useAsyncLoading && !(OSGetConsoleType() & 0x20000000))
-        mMemory = (char*)nlVirtualAlloc(0x70800, false);
+        mMemory = (char*)nlVirtualAlloc(kNisMemorySize, false);
     else
-        mMemory = (char*)nlMalloc(0x70800);
+        mMemory = (char*)nlMalloc(kNisMemorySize);
 
     for (int i = 0; i < 4; i++)
     {
@@ -208,12 +219,29 @@ void NisPlayer::HandleAsyncs()
         {
             if (!mAsyncStarted[i])
             {
+                NisHeader* pending = mLoadQueue[i];
+                const int reserveSize = pending->size + kNisAlignmentSlack;
+                const int freeSpan = mUsedFromBack - mUsedFromFront;
+
+                // The old path called nlBreak() after the pointers had already crossed.
+                // That turns a single large intro/outro (or several queued NIS clips) into
+                // a hard process crash. With the larger Android window this should be rare,
+                // but keep a non-fatal guard so a bad/oversized entry cannot corrupt the next
+                // cinematic or the match heap.
+                if (pending->size <= 0 || reserveSize >= freeSpan)
+                {
+                    OSReport("[nis] refusing oversized cinematic %s size=%d free=%d\n",
+                             pending->name, pending->size, freeSpan);
+                    mLoadQueue[i] = NULL;
+                    mAsyncStarted[i] = false;
+                    continue;
+                }
+
                 mAsyncStarted[i] = 1;
 
                 if (mLoadingFromBack)
                 {
-                    mUsedFromBack -= mLoadQueue[i]->size;
-                    mUsedFromBack -= 0x20;
+                    mUsedFromBack -= reserveSize;
                 }
 
                 int memoryOffset;
@@ -227,39 +255,48 @@ void NisPlayer::HandleAsyncs()
                 }
 
                 char* loadAt = mMemory + memoryOffset;
-                loadAt = loadAt + (0x20 - ((uintptr_t)loadAt & 0x1F));
+                const uintptr_t misalignment = (uintptr_t)loadAt & (kNisAlignmentSlack - 1);
+                if (misalignment != 0)
+                {
+                    loadAt += kNisAlignmentSlack - misalignment;
+                }
 
                 if (!mLoadingFromBack)
                 {
-                    mUsedFromFront += mLoadQueue[i]->size;
-                    mUsedFromFront += 0x20;
-                }
-
-                if (mUsedFromFront >= mUsedFromBack)
-                {
-                    nlBreak();
+                    mUsedFromFront += reserveSize;
                 }
 
                 BasicString<char, Detail::TempStringAllocator> fileName("art/nis/");
-                fileName.AppendInPlace(mLoadQueue[i]->name);
+                fileName.AppendInPlace(pending->name);
 
                 if (useAsyncLoading)
                 {
                     nlFile* file = nlOpen(fileName.c_str());
+                    if (file == NULL)
+                    {
+                        OSReport("[nis] failed to open cinematic %s\n", pending->name);
+                        if (mLoadingFromBack)
+                            mUsedFromBack += reserveSize;
+                        else
+                            mUsedFromFront -= reserveSize;
+                        mLoadQueue[i] = NULL;
+                        mAsyncStarted[i] = false;
+                        continue;
+                    }
                     if ((OSGetConsoleType() & 0x20000000) != 0)
                     {
-                        nlReadAsync(file, loadAt, mLoadQueue[i]->size, AsyncLoad, (uintptr_t)mLoadQueue[i]);
+                        nlReadAsync(file, loadAt, pending->size, AsyncLoad, (uintptr_t)pending);
                     }
                     else
                     {
-                        nlAsyncLoadFileToVirtualMemory(file, mLoadQueue[i]->size, loadAt, AsyncLoad, (uintptr_t)mLoadQueue[i]);
+                        nlAsyncLoadFileToVirtualMemory(file, pending->size, loadAt, AsyncLoad, (uintptr_t)pending);
                     }
                 }
                 else
                 {
                     int size = 0;
                     nlLoadEntireFileToVirtualMemory(fileName.c_str(), &size, 0x2000, loadAt, AllocateStart);
-                    AsyncLoad(0, loadAt + mLoadQueue[i]->size, mLoadQueue[i]->size, (uintptr_t)mLoadQueue[i]);
+                    AsyncLoad(0, loadAt + pending->size, pending->size, (uintptr_t)pending);
                 }
             }
         }
@@ -336,7 +373,7 @@ void NisPlayer::Reset()
     mActive = false;
     mLoadingFromBack = false;
     mUsedFromFront = 0;
-    mUsedFromBack = 0x70800;
+    mUsedFromBack = kNisMemorySize;
     mCamera.UnselectCameraAnimation();
     cCameraManager::Remove(mCamera);
 }
@@ -398,7 +435,7 @@ bool NisPlayer::Play()
     else
     {
         mLoadingFromBack = true;
-        mUsedFromBack = 0x70800;
+        mUsedFromBack = kNisMemorySize;
     }
 
     return true;
