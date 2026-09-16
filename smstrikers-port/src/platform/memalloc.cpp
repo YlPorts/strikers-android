@@ -17,18 +17,17 @@
 namespace
 {
 
-// Address space, committed by the OS on first touch; nothing here is returned to the OS.
 const std::size_t kRegionSize = 768u * 1024u * 1024u;
-
-// At least the largest alignment any caller asks for, so the payload never runs over the header.
 const std::size_t kHeaderSize = 32;
+const std::size_t kAllocatedMagic = (std::size_t)0x5354524b414c4c4full; // STRKALLO
+const std::size_t kFreedMagic = (std::size_t)0x5354524b46524545ull;     // STRKFREE
 
 struct BlockHeader
 {
-    std::size_t size;     // payload bytes, as the caller asked for them
-    std::size_t offset;   // payload - block start, so Free can recover it
-    void* owner;          // which allocator's accounting this belongs to
-    std::size_t pad;
+    std::size_t size;
+    std::size_t offset;
+    void* owner;
+    std::size_t magic;
 };
 
 char* s_region;
@@ -42,8 +41,8 @@ bool region_init()
 #if defined(_WIN32)
     void* p = VirtualAlloc(nullptr, kRegionSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 #else
-    void* p =
-        mmap(nullptr, kRegionSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* p = mmap(nullptr, kRegionSize, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED)
         p = nullptr;
 #endif
@@ -57,16 +56,13 @@ bool region_init()
 
 inline bool region_owns(const void* p)
 {
-    // Never dereferences p, so it is safe for a foreign pointer.
     return s_region != nullptr && (const char*)p >= s_region && (const char*)p < s_end;
 }
 
-// Per-instance accounting; the class layout is fixed, so the unused m_free_block_list points here.
 struct AllocState
 {
     std::size_t live;
     std::size_t pool;
-    // Size class i holds blocks of 2^(i+5) bytes.
     void* freeList[32];
 };
 
@@ -91,11 +87,10 @@ inline int size_class(std::size_t n)
 
 inline std::size_t class_size(int c) { return (std::size_t)32 << c; }
 
-}   // namespace
+} // namespace
 
 void MemoryAllocator::Initialize(void* memory, unsigned int size)
 {
-    // The size is kept so TotalFreeMemory still reports what the game budgeted for.
     (void)memory;
     m_free_block_list = nullptr;
     AllocState* st = state_for(&m_free_block_list);
@@ -105,14 +100,13 @@ void MemoryAllocator::Initialize(void* memory, unsigned int size)
 
 void* MemoryAllocator::Allocate(unsigned long size, unsigned int alignment, bool fromEnd)
 {
-    // fromEnd placed long-lived blocks at the top of the console's arena.
     (void)fromEnd;
     if (!region_init())
         return nullptr;
     if (alignment < alignof(std::max_align_t))
         alignment = alignof(std::max_align_t);
     if (alignment > kHeaderSize)
-        alignment = kHeaderSize;   // the header already reserves the largest
+        alignment = kHeaderSize;
 
     AllocState* st = state_for(&m_free_block_list);
     const std::size_t want = kHeaderSize + (size ? (std::size_t)size : 1);
@@ -139,6 +133,7 @@ void* MemoryAllocator::Allocate(unsigned long size, unsigned int alignment, bool
     h->size = (std::size_t)size;
     h->offset = (std::size_t)(aligned - (std::uintptr_t)block);
     h->owner = st;
+    h->magic = kAllocatedMagic;
     st->live += (std::size_t)size;
     return (void*)aligned;
 }
@@ -150,19 +145,27 @@ void MemoryAllocator::Free(void* p)
 
     if (!region_owns(p))
     {
-        // A foreign allocation: no header probe, since that read would be out of bounds.
         std::free(p);
         return;
     }
 
+    // Animation/effect objects can retain a stale reference after the port has already
+    // recycled their backing block. With the full match data resident this is much easier
+    // to hit than with the GameCube's paged VM. Never enqueue the same block twice: doing so
+    // makes the size-class list point at itself and the next allocation corrupts live data.
     BlockHeader* h = (BlockHeader*)((char*)p - sizeof(BlockHeader));
-    char* block = (char*)p - h->offset;
+    if (h->magic != kAllocatedMagic)
+        return;
 
-    // Charge the block to whoever allocated it: nlFree picks its instance by testing bit 31.
+    const std::size_t payloadSize = h->size;
+    const std::size_t payloadOffset = h->offset;
     AllocState* st = h->owner ? (AllocState*)h->owner : state_for(&m_free_block_list);
-    st->live -= h->size < st->live ? h->size : st->live;
+    char* block = (char*)p - payloadOffset;
 
-    const int cls = size_class(h->offset + h->size);
+    h->magic = kFreedMagic;
+    st->live -= payloadSize < st->live ? payloadSize : st->live;
+
+    const int cls = size_class(payloadOffset + payloadSize);
     *(void**)block = st->freeList[cls];
     st->freeList[cls] = block;
 }
@@ -175,11 +178,9 @@ unsigned int MemoryAllocator::TotalFreeMemory()
 
 unsigned int MemoryAllocator::LargestFreeBlock()
 {
-    // No fragmentation to report; the region satisfies anything up to the budget.
     return TotalFreeMemory();
 }
 
-// A carve-out for the VM window in vm.c; from the region, or pointers inside it test as foreign.
 extern "C" void* port_region_reserve(std::size_t size, std::size_t align)
 {
     if (!region_init())
@@ -193,7 +194,6 @@ extern "C" void* port_region_reserve(std::size_t size, std::size_t align)
     return (void*)aligned;
 }
 
-// Replaces the 0x8xxxxxxx tests that told a console pointer from a small integer id.
 extern "C" int port_region_owns(const void* p) { return region_owns(p) ? 1 : 0; }
 
 extern "C" void port_region_stats(std::size_t* used, std::size_t* total)
@@ -203,4 +203,3 @@ extern "C" void port_region_stats(std::size_t* used, std::size_t* total)
     if (total)
         *total = (s_region != nullptr) ? (std::size_t)(s_end - s_region) : 0;
 }
-
