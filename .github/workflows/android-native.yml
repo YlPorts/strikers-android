@@ -36,35 +36,35 @@ jobs:
           path = Path('smstrikers-port/src/Game/Render/Nis.cpp')
           source = path.read_text()
           old = '''            if ((oldTime <= triggerFrame) && (newTime > triggerFrame))
-                      {
-                          mTriggers[i].Fire(*this);
-                      }'''
+            {
+                mTriggers[i].Fire(*this);
+            }'''
           new = '''            if ((oldTime <= triggerFrame) && (newTime > triggerFrame))
-                      {
-                          OSReport("[nistrig] BEGIN nis=%s i=%d type=%d frame=%.1f norm=%.4f old=%.4f new=%.4f name=%s target=%s p1=%lu p2=%lu p3=%lu p4=%lu f1=%.3f\\n",
-                                   mHeader != NULL ? mHeader->name : "(unknown)",
-                                   i,
-                                   (int)mTriggers[i].type,
-                                   (double)mTriggers[i].frameNumber,
-                                   (double)triggerFrame,
-                                   (double)oldTime,
-                                   (double)newTime,
-                                   mTriggers[i].name != NULL ? mTriggers[i].name : "(null)",
-                                   mTriggers[i].target != NULL ? mTriggers[i].target : "(null)",
-                                   (unsigned long)mTriggers[i].params.param1,
-                                   (unsigned long)mTriggers[i].params.param2,
-                                   (unsigned long)mTriggers[i].params.param3,
-                                   (unsigned long)mTriggers[i].params.param4,
-                                   (double)mTriggers[i].params.float1);
-                          mTriggers[i].Fire(*this);
-                          OSReport("[nistrig] END nis=%s i=%d type=%d frame=%.1f name=%s target=%s\\n",
-                                   mHeader != NULL ? mHeader->name : "(unknown)",
-                                   i,
-                                   (int)mTriggers[i].type,
-                                   (double)mTriggers[i].frameNumber,
-                                   mTriggers[i].name != NULL ? mTriggers[i].name : "(null)",
-                                   mTriggers[i].target != NULL ? mTriggers[i].target : "(null)");
-                      }'''
+            {
+                OSReport("[nistrig] BEGIN nis=%s i=%d type=%d frame=%.1f norm=%.4f old=%.4f new=%.4f name=%s target=%s p1=%lu p2=%lu p3=%lu p4=%lu f1=%.3f\\n",
+                         mHeader != NULL ? mHeader->name : "(unknown)",
+                         i,
+                         (int)mTriggers[i].type,
+                         (double)mTriggers[i].frameNumber,
+                         (double)triggerFrame,
+                         (double)oldTime,
+                         (double)newTime,
+                         mTriggers[i].name != NULL ? mTriggers[i].name : "(null)",
+                         mTriggers[i].target != NULL ? mTriggers[i].target : "(null)",
+                         (unsigned long)mTriggers[i].params.param1,
+                         (unsigned long)mTriggers[i].params.param2,
+                         (unsigned long)mTriggers[i].params.param3,
+                         (unsigned long)mTriggers[i].params.param4,
+                         (double)mTriggers[i].params.float1);
+                mTriggers[i].Fire(*this);
+                OSReport("[nistrig] END nis=%s i=%d type=%d frame=%.1f name=%s target=%s\\n",
+                         mHeader != NULL ? mHeader->name : "(unknown)",
+                         i,
+                         (int)mTriggers[i].type,
+                         (double)mTriggers[i].frameNumber,
+                         mTriggers[i].name != NULL ? mTriggers[i].name : "(null)",
+                         mTriggers[i].target != NULL ? mTriggers[i].target : "(null)");
+            }'''
           if old not in source:
               raise SystemExit('UpdateTriggers patch target was not found')
           path.write_text(source.replace(old, new, 1))
