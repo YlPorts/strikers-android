@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.Application;
 import android.os.Build;
 import android.os.Bundle;
+import android.system.Os;
 
 /** Keeps the launcher alive and surfaces the most recent :game process crash. */
 public final class DiagnosticApplication extends Application
@@ -13,6 +14,15 @@ public final class DiagnosticApplication extends Application
     public void onCreate() {
         super.onCreate();
         registerActivityLifecycleCallbacks(this);
+
+        // This Application is created independently in the launcher and :game
+        // processes. Exporting the diagnostic switches here means the native
+        // core sees them before SDL/libstrikers is loaded.
+        try {
+            Os.setenv("STRIKERS_LOG_NIS", "1", true);
+            Os.setenv("STRIKERS_DIAGNOSTIC_BUILD", "1", true);
+        } catch (Throwable ignored) {
+        }
     }
 
     @Override
