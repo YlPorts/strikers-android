@@ -34,6 +34,11 @@ public:
 
 class EmissionController;
 
+static inline bool IsValidNisCharacterIndex(int index)
+{
+    return index >= 0 && index < Nis::MAX_NUM_CHARACTERS;
+}
+
 /**
  * Offset/Address/Size: 0x1658 | 0x8012CA68 | size: 0x53C
  */
@@ -64,7 +69,6 @@ Nis::Nis(NisHeader& header, char* data, int size)
     int numAnimations = 0;
     while (chunk != end)
     {
-        // PORT: the file is big-endian and each animation converts its own subtree, so read the header rather than trusting it.
         const u32 uChunkID = port_be32(&chunk->m_ID) & 0x80FFFFFF;
         const u32 uChunkSize = port_be32(&chunk->m_Size);
 
@@ -72,6 +76,14 @@ Nis::Nis(NisHeader& header, char* data, int size)
         {
             anim = cSAnim::Initialize(chunk);
             i = NisPlayer::Instance()->TargetToIndex(mTarget, numAnimations, mWinnerType);
+            if (!IsValidNisCharacterIndex(i))
+            {
+                OSReport("[nis] invalid target index %d for %s animation %d; using first free slot\n",
+                         i, mHeader->name, numAnimations);
+                for (i = 0; i < MAX_NUM_CHARACTERS && mCharacterControllers[i] != NULL; ++i)
+                {
+                }
+            }
             if (NisPlayer::Instance()->mGoalScorerCharIndex >= 0 && mTarget == NIS_TARGET_WINNER_SIDEKICK)
             {
                 int goalScorer = NisPlayer::Instance()->mGoalScorerCharIndex;
@@ -80,15 +92,15 @@ Nis::Nis(NisHeader& header, char* data, int size)
             }
             NisPlayer* player = NisPlayer::Instance();
             player->mGoalScorerCharIndex = -1;
-            if (mCharacterControllers[i] != NULL)
+            if (!IsValidNisCharacterIndex(i) || mCharacterControllers[i] != NULL)
             {
                 i = NisPlayer::Instance()->TargetToIndex(NIS_TARGET_HOME_CAPTAIN, numAnimations, mWinnerType);
             }
-            if (mCharacterControllers[i] != NULL)
+            if (!IsValidNisCharacterIndex(i) || mCharacterControllers[i] != NULL)
             {
                 i = NisPlayer::Instance()->TargetToIndex(NIS_TARGET_AWAY_CAPTAIN, numAnimations, mWinnerType);
             }
-            if (mCharacterControllers[i] != NULL)
+            if (!IsValidNisCharacterIndex(i) || mCharacterControllers[i] != NULL)
             {
                 for (i = 0; i < 10; i++)
                 {
@@ -96,7 +108,7 @@ Nis::Nis(NisHeader& header, char* data, int size)
                         break;
                 }
             }
-            if (i < 10)
+            if (IsValidNisCharacterIndex(i) && anim != NULL)
             {
                 mBallId[i] = numAnimations;
                 cPN_SAnimController* controller = ::new (AllocateSAnimController()) cPN_SAnimController(anim, NULL, PM_HOLD, NULL, 0, false);
@@ -106,11 +118,15 @@ Nis::Nis(NisHeader& header, char* data, int size)
                     mAudioCharacterIndex = i;
                 }
             }
+            else
+            {
+                OSReport("[nis] skipping unusable character animation %d in %s (slot=%d)\n",
+                         numAnimations, mHeader->name, i);
+            }
             numAnimations++;
         }
         if (uChunkID == 0x80015501)
         {
-            // PORT: nothing else owns these; a chunk the converter refuses would be walked out of bounds.
             if (port_cam_swap(chunk, uChunkSize + 8) == 0)
             {
                 OSReport("Error: NIS camera %lu is not well-formed; skipped\n", (unsigned long)mNumCameras);
@@ -257,7 +273,7 @@ void Nis::Render()
     for (int i = 0; i < 10; i++)
     {
         pDC = &snapshot.GetCharacter(i);
-        if (mCharacterControllers[i] == NULL)
+        if (mCharacterControllers[i] == NULL || mCharacterControllers[i]->m_pSAnim == NULL)
             continue;
         pDC->mVisible = true;
 
@@ -305,6 +321,13 @@ nlVector3 Nis::Offset() const
  */
 void Nis::AddTrigger(NisTriggerType triggerType, float frameNumber, const char* name, const char* target, Nis::TriggerParams* trigParams)
 {
+    if (mNumTriggers >= MAX_NUM_TRIGGERS)
+    {
+        OSReport("[nis] dropping trigger for %s: trigger table full (%d)\n",
+                 mHeader != NULL ? mHeader->name : "(unknown)", mNumTriggers);
+        return;
+    }
+
     mTriggers[mNumTriggers].type = triggerType;
     mTriggers[mNumTriggers].frameNumber = frameNumber;
     mTriggers[mNumTriggers].name = name;
@@ -331,6 +354,9 @@ void Nis::AddTrigger(NisTriggerType triggerType, float frameNumber, const char* 
 
 static inline bool EffectNeedsValidCoordSys(EffectsGroup* pGroup)
 {
+    if (pGroup == NULL)
+        return false;
+
     EffectsSpec* pSpec = pGroup->m_specs;
     if (pSpec == NULL)
         return false;
@@ -348,6 +374,12 @@ static inline bool EffectNeedsValidCoordSys(EffectsGroup* pGroup)
  */
 void Nis::Trigger::FireEffect(const Nis& nis) const
 {
+    if (name == NULL || target == NULL)
+    {
+        OSReport("[nis] skipping malformed effect trigger: missing name/target\n");
+        return;
+    }
+
     NisPlayer* player = NULL;
     if (params.param1 == 0)
     {
@@ -383,8 +415,21 @@ void Nis::Trigger::FireEffect(const Nis& nis) const
         {
             charIdx = NisPlayer::Instance()->TargetToIndex(nis.mTarget, idx, nis.mWinnerType);
         }
-        if (charIdx >= 10)
+
+        if (!IsValidNisCharacterIndex(charIdx))
+        {
+            OSReport("[nis] skipping effect %s target=%s: invalid character index %d\n",
+                     name, target, charIdx);
             return;
+        }
+
+        cPN_SAnimController* controller = nis.mCharacterControllers[charIdx];
+        if (controller == NULL || controller->m_pSAnim == NULL)
+        {
+            OSReport("[nis] skipping effect %s target=%s: character %d has no animation controller\n",
+                     name, target, charIdx);
+            return;
+        }
 
         EffectsGroup* group = fxGetGroup(name);
         if (group == NULL)
@@ -392,7 +437,7 @@ void Nis::Trigger::FireEffect(const Nis& nis) const
         EmissionController* ctrl = EmissionManager::Create(group, 0);
         if (ctrl == NULL)
             return;
-        ctrl->SetAnimController(*nis.mCharacterControllers[charIdx]);
+        ctrl->SetAnimController(*controller);
         ctrl->m_uUserData = (uintptr_t)player;
         if (!nis.mMirrored)
         {
@@ -415,11 +460,18 @@ void Nis::Trigger::FireEffect(const Nis& nis) const
     else
     {
         World* const world = WorldManager::s_World;
+        if (world == NULL)
+            return;
         HelperObject* helperObj = world->FindHelperObject(world->GetHashIdForGenericName(target));
         if (helperObj == NULL)
             return;
+        EffectsGroup* group = fxGetGroup(name);
+        if (group == NULL)
+            return;
         nlVector3 velocity = { 0.0f, 0.0f, 1.0f };
-        EmissionController* ctrl = EmissionManager::Create(fxGetGroup(name), 0);
+        EmissionController* ctrl = EmissionManager::Create(group, 0);
+        if (ctrl == NULL)
+            return;
         ctrl->m_uUserData = (uintptr_t)player;
         ctrl->SetVelocity(velocity);
         ctrl->SetPosition(helperObj->m_worldMatrix.GetTranslation());
@@ -436,7 +488,7 @@ void Nis::Trigger::Fire(Nis& nis) const
     {
     case NIS_TRIGGER_TYPE_PLAY_SOUND:
     {
-        uintptr_t index;   /* PORT: may hold an SFXEmitter* */
+        uintptr_t index;
         bool isEmitter;
         bool stopAtNisEnd;
         float volume = params.float1;
@@ -446,14 +498,22 @@ void Nis::Trigger::Fire(Nis& nis) const
 
         volume = params.float1 != -1.0f ? params.float1 : 100.0f;
 
+        if (name == NULL || target == NULL)
+        {
+            OSReport("[nis] skipping malformed sound trigger: missing name/target\n");
+            break;
+        }
+
         if (params.param1 == (unsigned long)-1)
         {
             if (strlen(target) > 0)
             {
                 World* const pWorld = WorldManager::s_World;
+                if (pWorld == NULL)
+                    break;
                 HelperObject* helper = pWorld->FindHelperObject(pWorld->GetHashIdForGenericName(target));
                 if (helper == NULL)
-                    return;
+                    break;
                 static const nlVector3 zeroDirection = { 0.0f, 0.0f, 0.0f };
                 index = Audio::PlayWorldSFXbyStr(name, volume, -1.0f, true, false, (const nlVector3*)&helper->m_worldMatrix.e2[3][0], &zeroDirection, &soundType);
                 isEmitter = true;
@@ -465,7 +525,16 @@ void Nis::Trigger::Fire(Nis& nis) const
         }
         else
         {
-            index = Audio::PlayCharSFXbyStr(name, (NisCharacterClass)params.param1, volume, -1.0f, true, false, &ReplayManager::Instance()->GetMutableRenderSnapshot().GetCharacter(nis.mAudioCharacterIndex).mBip01Position, &ReplayManager::Instance()->GetMutableRenderSnapshot().GetCharacter(nis.mAudioCharacterIndex).mVelocity, &soundType);
+            const int audioIndex = nis.mAudioCharacterIndex;
+            if (!IsValidNisCharacterIndex(audioIndex) || nis.mCharacterControllers[audioIndex] == NULL)
+            {
+                OSReport("[nis] skipping character SFX %s: invalid audio character %d\n", name, audioIndex);
+                break;
+            }
+            RenderSnapshot& snapshot = ReplayManager::Instance()->GetMutableRenderSnapshot();
+            index = Audio::PlayCharSFXbyStr(name, (NisCharacterClass)params.param1, volume, -1.0f, true, false,
+                                            &snapshot.GetCharacter(audioIndex).mBip01Position,
+                                            &snapshot.GetCharacter(audioIndex).mVelocity, &soundType);
             isEmitter = true;
         }
 
@@ -480,10 +549,24 @@ void Nis::Trigger::Fire(Nis& nis) const
 
     case NIS_TRIGGER_TYPE_PLAY_RANDOM_DIALOGUE:
     {
-        uintptr_t index;   /* PORT: may hold an SFXEmitter* */
+        if (name == NULL)
+        {
+            OSReport("[nis] skipping random dialogue: missing trigger name\n");
+            break;
+        }
+        uintptr_t index;
         bool stopAtNisEnd;
         unsigned long soundType = (unsigned long)-1;
-        index = Audio::cCharacterSFX::PlayNISRandomCharDialogue((CharDialogueType)params.param2, (NisCharacterClass)params.param1, 100.0f, -1.0f, true, &ReplayManager::Instance()->GetMutableRenderSnapshot().GetCharacter(nis.mAudioCharacterIndex).mBip01Position, &ReplayManager::Instance()->GetMutableRenderSnapshot().GetCharacter(nis.mAudioCharacterIndex).mVelocity, &soundType);
+        const int audioIndex = nis.mAudioCharacterIndex;
+        if (!IsValidNisCharacterIndex(audioIndex) || nis.mCharacterControllers[audioIndex] == NULL)
+        {
+            OSReport("[nis] skipping random dialogue: invalid audio character %d\n", audioIndex);
+            break;
+        }
+        RenderSnapshot& snapshot = ReplayManager::Instance()->GetMutableRenderSnapshot();
+        index = Audio::cCharacterSFX::PlayNISRandomCharDialogue((CharDialogueType)params.param2, (NisCharacterClass)params.param1, 100.0f, -1.0f, true,
+                                                                &snapshot.GetCharacter(audioIndex).mBip01Position,
+                                                                &snapshot.GetCharacter(audioIndex).mVelocity, &soundType);
         stopAtNisEnd = true;
         if (params.param3 != (unsigned long)-1)
             stopAtNisEnd = false;
@@ -495,7 +578,8 @@ void Nis::Trigger::Fire(Nis& nis) const
     }
 
     case NIS_TRIGGER_TYPE_STOP_SOUND:
-        nis.StopNisAudio(NIS_AUDIO_TYPE_SFX, name);
+        if (name != NULL)
+            nis.StopNisAudio(NIS_AUDIO_TYPE_SFX, name);
         break;
 
     case NIS_TRIGGER_TYPE_PLAY_STREAM:
