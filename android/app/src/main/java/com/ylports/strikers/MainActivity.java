@@ -17,20 +17,7 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
-import java.util.ArrayDeque;
-import java.util.Locale;
-
-/**
- * Java-only launcher and Android settings screen.
- *
- * The ROM picker is only needed on first run (or when the user explicitly changes
- * the ROM). Language and internal render resolution are chosen here before each
- * launch, while the native game remains isolated in the private :game process.
- */
+/** Clean launcher for the Android release build. */
 public final class MainActivity extends Activity {
     private static final int PICK_GAME_IMAGE = 1001;
 
@@ -51,12 +38,10 @@ public final class MainActivity extends Activity {
             "720p · recomendado",
             "900p · equilibrado",
             "1080p · calidad",
-            "Auto · pantalla (máx. 1080p)"
+            "Auto · pantalla"
     };
-    // 0 means automatic: use the device's short side, capped at 1080 rows.
     private static final int[] RESOLUTION_ROWS = {448, 720, 900, 1080, 0};
 
-    private TextView statusView;
     private Spinner languageSpinner;
     private Spinner resolutionSpinner;
     private Button chooseGameButton;
@@ -71,20 +56,13 @@ public final class MainActivity extends Activity {
         if (saved != null && !canOpenSavedImage(saved)) {
             prefs.edit().remove(PREF_GAME_URI).apply();
         }
-
-        // Unlike the previous automatic launch, keep this small settings screen
-        // visible so resolution/language can be changed before entering the game.
-        // The Android document picker itself is still only first-run/fallback.
         setContentView(buildLauncherView());
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        if (statusView != null) {
-            updateLauncherControls();
-            appendLastRunLog();
-        }
+        updateLauncherControls();
     }
 
     private View buildLauncherView() {
@@ -95,36 +73,18 @@ public final class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(28), dp(24), dp(28), dp(28));
+        root.setPadding(dp(28), dp(38), dp(28), dp(32));
         scroll.addView(root, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT));
 
         TextView title = new TextView(this);
-        title.setText("STRIKERS ANDROID");
+        title.setText("Strikers Android");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(27f);
+        title.setTextSize(30f);
         title.setGravity(Gravity.CENTER);
+        title.setPadding(0, 0, 0, dp(26));
         root.addView(title, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Native ARM64 · Vulkan/WebGPU · SDL3 / Aurora");
-        subtitle.setTextColor(Color.rgb(145, 155, 170));
-        subtitle.setTextSize(13f);
-        subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, dp(8), 0, dp(14));
-        root.addView(subtitle, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        statusView = new TextView(this);
-        statusView.setTextColor(Color.rgb(205, 210, 220));
-        statusView.setTextSize(14f);
-        statusView.setGravity(Gravity.CENTER);
-        statusView.setPadding(0, 0, 0, dp(14));
-        root.addView(statusView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -154,7 +114,7 @@ public final class MainActivity extends Activity {
         chooseGameButton.setAllCaps(false);
         chooseGameButton.setOnClickListener(v -> chooseGameImage());
         LinearLayout.LayoutParams chooseParams = buttonParams();
-        chooseParams.topMargin = dp(18);
+        chooseParams.topMargin = dp(24);
         root.addView(chooseGameButton, chooseParams);
 
         playGameButton = new Button(this);
@@ -165,17 +125,6 @@ public final class MainActivity extends Activity {
         playParams.topMargin = dp(10);
         root.addView(playGameButton, playParams);
 
-        TextView note = new TextView(this);
-        note.setText("720p es el valor recomendado para evitar que el teléfono renderice el juego innecesariamente a 1080p. "
-                + "El idioma del sistema solo cambia el disco europeo (G4QP01). La ROM queda recordada; usa Cambiar ROM solo cuando quieras reemplazarla.");
-        note.setTextColor(Color.rgb(125, 135, 150));
-        note.setTextSize(12f);
-        note.setGravity(Gravity.CENTER);
-        note.setPadding(0, dp(16), 0, 0);
-        root.addView(note, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
         updateLauncherControls();
         return scroll;
     }
@@ -185,10 +134,9 @@ public final class MainActivity extends Activity {
         label.setText(value);
         label.setTextColor(Color.WHITE);
         label.setTextSize(14f);
-        label.setPadding(0, dp(10), 0, dp(4));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                selectorWidth(), LinearLayout.LayoutParams.WRAP_CONTENT);
-        root.addView(label, params);
+        label.setPadding(0, dp(12), 0, dp(4));
+        root.addView(label, new LinearLayout.LayoutParams(
+                selectorWidth(), LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
     private LinearLayout.LayoutParams selectorParams() {
@@ -207,90 +155,12 @@ public final class MainActivity extends Activity {
     private void updateLauncherControls() {
         String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_GAME_URI, null);
         boolean hasGame = saved != null;
-
-        if (statusView != null) {
-            int rows = selectedResolutionRows();
-            String resolution = rows == 0 ? "Auto" : rows + "p";
-            statusView.setText(hasGame
-                    ? "ROM: lista · Resolución: " + resolution
-                    : "Primera configuración: selecciona tu imagen del juego");
-        }
         if (chooseGameButton != null) {
-            chooseGameButton.setText(hasGame
-                    ? "Cambiar ROM"
-                    : "Seleccionar ISO / GCM / CISO / GCZ");
+            chooseGameButton.setText(hasGame ? "Cambiar ROM" : "Seleccionar ROM");
         }
         if (playGameButton != null) {
             playGameButton.setEnabled(hasGame);
         }
-    }
-
-    private void appendLastRunLog() {
-        File log = RunLog.file(this);
-        if (!log.isFile() || log.length() == 0) {
-            return;
-        }
-
-        ArrayDeque<String> important = new ArrayDeque<>();
-        boolean rendererStarted = false;
-        boolean gameActivityStarted = false;
-        try (BufferedReader reader = new BufferedReader(new FileReader(log))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.contains("[port] render target")
-                        || line.contains("CARD API Initialized")) {
-                    rendererStarted = true;
-                }
-                if (line.contains("SDL activity: onCreate AFTER")) {
-                    gameActivityStarted = true;
-                }
-
-                if (isRealFailureLine(line)) {
-                    if (important.size() == 6) {
-                        important.removeFirst();
-                    }
-                    important.addLast(line);
-                }
-            }
-        } catch (IOException ignored) {
-            return;
-        }
-
-        if (!important.isEmpty()) {
-            StringBuilder text = new StringBuilder("\n\nÚltimo arranque: fallo detectado:\n");
-            for (String line : important) {
-                text.append(line).append('\n');
-            }
-            statusView.append(text.toString().trim());
-        } else if (rendererStarted) {
-            statusView.append("\n\nÚltimo arranque: renderer activo.");
-        } else if (gameActivityStarted) {
-            statusView.append("\n\nÚltimo arranque: núcleo iniciado sin fallo fatal registrado.");
-        }
-    }
-
-    private boolean isRealFailureLine(String line) {
-        String lower = line.toLowerCase(Locale.ROOT);
-        if (lower.contains("unhandled xf")
-                || lower.contains("unhandled bp")
-                || lower.contains("surface texture is error, dropping surface")
-                || lower.contains("skipping present; window not presentable")
-                || lower.contains("surfacedestroyed")
-                || lower.contains("onpause")
-                || lower.contains("onstop")) {
-            return false;
-        }
-
-        return lower.contains("sigsegv")
-                || lower.contains("sigabrt")
-                || lower.contains("*** strikers android: early native load crash")
-                || lower.contains("disc validation failed")
-                || lower.contains("load failed")
-                || lower.contains("startactivity failed")
-                || lower.contains("startactivity falló")
-                || lower.contains("uncaught exception")
-                || lower.contains("[error]")
-                || lower.contains("fatal error");
     }
 
     private boolean canOpenSavedImage(String saved) {
@@ -330,7 +200,6 @@ public final class MainActivity extends Activity {
         try {
             getContentResolver().takePersistableUriPermission(image, takeFlags);
         } catch (SecurityException ignored) {
-            // The current one-shot grant is still usable for this launch.
         }
 
         getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -338,23 +207,19 @@ public final class MainActivity extends Activity {
                 .putString(PREF_GAME_URI, image.toString())
                 .apply();
         updateLauncherControls();
-        Toast.makeText(this, "ROM guardada. Elige idioma/resolución y pulsa Jugar.",
-                Toast.LENGTH_SHORT).show();
     }
 
     private boolean launchGame() {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         String saved = prefs.getString(PREF_GAME_URI, null);
         if (saved == null) {
-            Toast.makeText(this, "Selecciona primero tu imagen de Super Mario Strikers.",
-                    Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Selecciona una ROM primero.", Toast.LENGTH_SHORT).show();
             return false;
         }
         if (!canOpenSavedImage(saved)) {
             prefs.edit().remove(PREF_GAME_URI).apply();
             updateLauncherControls();
-            Toast.makeText(this, "Android perdió el acceso a la ROM. Selecciónala de nuevo.",
-                    Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Selecciona la ROM de nuevo.", Toast.LENGTH_LONG).show();
             return false;
         }
 
@@ -376,9 +241,6 @@ public final class MainActivity extends Activity {
         Intent game = new Intent();
         game.setClassName(getPackageName(), getPackageName() + ".GameBootstrapActivity");
         game.putExtra(GameBootstrapActivity.EXTRA_GAME_URI, saved);
-        // Pass launch-critical settings directly to the private :game process.
-        // SharedPreferences is still used to remember the UI selection, but the
-        // current launch never races an asynchronous preferences disk write.
         game.putExtra(GameBootstrapActivity.EXTRA_LANGUAGE, language);
         game.putExtra(GameBootstrapActivity.EXTRA_RENDER_ROWS, rows);
         game.setData(Uri.parse(saved));
@@ -387,24 +249,11 @@ public final class MainActivity extends Activity {
             startActivity(game);
             return true;
         } catch (Exception e) {
-            RunLog.append(this, "launcher: startActivity falló: " + e.getClass().getSimpleName()
-                    + ": " + e.getMessage());
-            Toast.makeText(this, "No se pudo iniciar el proceso del juego: "
-                    + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
+            RunLog.append(this, "launcher: startActivity failed: "
+                    + e.getClass().getSimpleName() + ": " + e.getMessage());
+            Toast.makeText(this, "No se pudo iniciar el juego.", Toast.LENGTH_LONG).show();
             return false;
         }
-    }
-
-    private int selectedResolutionRows() {
-        if (resolutionSpinner == null) {
-            return getSharedPreferences(PREFS, MODE_PRIVATE)
-                    .getInt(PREF_RESOLUTION_ROWS, 720);
-        }
-        int index = resolutionSpinner.getSelectedItemPosition();
-        if (index < 0 || index >= RESOLUTION_ROWS.length) {
-            return 720;
-        }
-        return RESOLUTION_ROWS[index];
     }
 
     private static int languageIndex(String value) {
@@ -422,7 +271,7 @@ public final class MainActivity extends Activity {
                 return i;
             }
         }
-        return 1; // 720p recommended default
+        return 1;
     }
 
     private int dp(int value) {
