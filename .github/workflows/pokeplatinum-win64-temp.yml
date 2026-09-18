@@ -1,0 +1,73 @@
+name: Pokemon Platinum Win64 temporary build
+
+on:
+  push:
+    branches:
+      - pokeplatinum-win64-build-20260917
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_ACTIONS: "true"
+
+jobs:
+  build-win64:
+    runs-on: windows-latest
+    steps:
+      - name: Clone Pokemon Platinum PC port
+        shell: powershell
+        run: |
+          git clone --depth 1 --branch pc_port https://github.com/cybervisi0n/pokeplatinum.git pokeplatinum
+          git clone --depth 1 https://github.com/cybervisi0n/libntr.git pokeplatinum/subprojects/libntr
+
+      - name: Apply 3D matrix-stack fix
+        shell: powershell
+        run: |
+          $path = "pokeplatinum/subprojects/libntr/libraries/sim/src/g3_handler.cpp"
+          $src = Get-Content -Raw $path
+
+          $oldPos = 'memcpy( &currentPositionMatrix, &curMtxStack->mtxs[curMtxStack->stackPtr], sizeof(G3SIM_Matrix_t));'
+          $oldVec = 'memcpy( &currentVectorMatrix, &curMtxStack->mtxs[curMtxStack->stackPtr], sizeof(G3SIM_Matrix_t));'
+          $newPos = 'memcpy( &currentPositionMatrix, &positionMtxStack->mtxs[positionMtxStack->stackPtr], sizeof(G3SIM_Matrix_t));'
+          $newVec = 'memcpy( &currentVectorMatrix, &vectorMtxStack->mtxs[vectorMtxStack->stackPtr], sizeof(G3SIM_Matrix_t));'
+
+          if (-not $src.Contains($oldPos)) { throw "Expected POSITION MtxPop line not found" }
+          if (-not $src.Contains($oldVec)) { throw "Expected VECTOR MtxPop line not found" }
+
+          $src = $src.Replace($oldPos, $newPos).Replace($oldVec, $newVec)
+          Set-Content -NoNewline -Encoding utf8 $path $src
+
+          $check = Get-Content -Raw $path
+          if (-not $check.Contains($newPos) -or -not $check.Contains($newVec)) {
+            throw "3D fix verification failed"
+          }
+
+      - name: Install MSYS2 toolchain
+        working-directory: pokeplatinum
+        shell: powershell
+        run: .\Install_MSys2.ps1
+
+      - name: Build Win64
+        working-directory: pokeplatinum
+        shell: powershell
+        run: .\Launch_Msys2.ps1 "make win64"
+
+      - name: Package Win64 runtime
+        working-directory: pokeplatinum
+        shell: powershell
+        run: .\Launch_Msys2.ps1 "./tools/scripts/package_artifacts_win64.sh"
+
+      - name: Verify executable
+        shell: powershell
+        run: |
+          $exe = "pokeplatinum/build_win64/pokeplatinum/release_win64/main.exe"
+          if (-not (Test-Path $exe)) { throw "main.exe was not generated" }
+          Get-Item $exe | Format-List Name,Length,LastWriteTime
+
+      - name: Upload Win64 artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: pokeplatinum-win64-3d-fixed
+          path: pokeplatinum/build_win64/pokeplatinum/release_win64
+          if-no-files-found: error
