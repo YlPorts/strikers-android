@@ -212,7 +212,9 @@ public class TouchControllerViewTest {
                     .setInsets(WindowInsets.Type.mandatorySystemGestures(), Insets.of(0, 0, 0, bottom))
                     .build();
         }
-        return new WindowInsets(new Rect(left, top, right, bottom));
+        // The pre-29 framework constructor is hidden from current SDK stubs.
+        return ReflectionHelpers.callConstructor(WindowInsets.class,
+                ReflectionHelpers.ClassParameter.from(Rect.class, new Rect(left, top, right, bottom)));
     }
 
     private void touch(int action, int[] ids, float[] xs, float[] ys) {

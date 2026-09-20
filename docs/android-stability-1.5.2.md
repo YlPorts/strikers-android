@@ -55,10 +55,20 @@ match, Wario/Mario introductions, repeated background/resume, rotating in both
 landscape directions, controller connect/disconnect with each visibility setting,
 and saved custom layouts. No measured FPS improvement is claimed.
 
-## Signing
+## Signing and upgrade compatibility
 
-The inherited release build still uses the Gradle debug signing configuration.
-This pass does not introduce or replace a signing key. CI-generated debug keys may
-differ between runners; verify the certificate against an installed APK before
-expecting an in-place update. Do not remove an installed game with saves just to
-work around a signature mismatch.
+The CI APK uses the inherited debug signing configuration. The delivered APK is
+re-signed offline with the existing StrikersAndroid 1.5 release key (never stored
+in this repository). Release certificate SHA-256:
+
+`e505aded7ce3985c69e4005cf489d33641a7ad13d4f55c7a62a64e57141a9471`
+
+The saved 1.5 APK has this same certificate and versionCode 150. This build uses
+versionCode 152 so Android can accept it as an update. The delivered 1.5.1 APK
+instead used a temporary Android Debug certificate:
+
+`2b123c8a842685e135175f50cff793584b72d69da95561b4dd7b36db462f685e`
+
+The 1.5 release key cannot update that differently signed 1.5.1 installation in
+place. Keep the installed app and its saves if Android rejects the update; do not
+uninstall just to bypass the signature check.
