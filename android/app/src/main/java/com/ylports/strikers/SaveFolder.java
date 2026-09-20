@@ -5,6 +5,7 @@ import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
+import android.os.Bundle;
 import android.provider.DocumentsContract;
 import android.provider.DocumentsContract.Document;
 import android.system.Os;
@@ -60,7 +61,7 @@ final class SaveFolder {
         Uri query = DocumentsContract.buildChildDocumentsUriUsingTree(tree, DocumentsContract.getDocumentId(parent));
         List<Entry> entries = new ArrayList<>();
         try (Cursor cursor = resolver.query(query, new String[]{Document.COLUMN_DOCUMENT_ID,
-                Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE}, null, null, null)) {
+                Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE}, Bundle.EMPTY, null)) {
             if (cursor == null) throw new IOException("No se pudo leer la carpeta de partidas.");
             while (cursor.moveToNext()) entries.add(new Entry(cursor.getString(1),
                     Document.MIME_TYPE_DIR.equals(cursor.getString(2)),
@@ -132,7 +133,7 @@ final class SaveFolder {
     }
 
     String displayName() throws IOException {
-        try (Cursor cursor = resolver.query(root, new String[]{Document.COLUMN_DISPLAY_NAME}, null, null, null)) {
+        try (Cursor cursor = resolver.query(root, new String[]{Document.COLUMN_DISPLAY_NAME}, Bundle.EMPTY, null)) {
             if (cursor != null && cursor.moveToFirst()) return cursor.getString(0);
         }
         throw new IOException("No se pudo leer el nombre de la carpeta.");
