@@ -60,6 +60,7 @@ public final class GameBootstrapActivity extends Activity {
             runOnUiThread(() -> showPreparing(message));
             return;
         }
+        if (isFinishing() || isDestroyed()) return;
 
         RunLog.append(this, "bootstrap UI: " + message);
         TextView text = new TextView(this);
@@ -203,7 +204,6 @@ public final class GameBootstrapActivity extends Activity {
                     getIntent().getBooleanExtra(EXTRA_AUTO_HIDE_TOUCH, false));
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) {
-                    closeGameImageFd();
                     return;
                 }
                 try {
@@ -234,6 +234,7 @@ public final class GameBootstrapActivity extends Activity {
             runOnUiThread(() -> showError(message));
             return;
         }
+        if (isFinishing() || isDestroyed()) return;
 
         RunLog.append(this, "bootstrap: showing error screen");
         LinearLayout root = new LinearLayout(this);

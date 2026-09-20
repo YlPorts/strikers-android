@@ -37,6 +37,8 @@ android {
     namespace = "com.ylports.strikers"
     compileSdk = 36
     ndkVersion = "28.2.13676358"
+    // AGP 9 creates unit tests only for the tested build type by default.
+    testBuildType = "release"
 
     defaultConfig {
         applicationId = "com.ylports.strikers"
