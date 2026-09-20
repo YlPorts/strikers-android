@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.app.Application;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.os.Looper;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
@@ -12,6 +13,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowAlertDialog;
 import static org.junit.Assert.*;
+import static org.robolectric.Shadows.shadowOf;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {26, 35}, application = Application.class)
@@ -24,6 +26,7 @@ public class CrashReportTest {
         AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
         assertNotNull(dialog);
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+        shadowOf(Looper.getMainLooper()).idle();
         ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
         String text = clipboard.getPrimaryClip().getItemAt(0).getText().toString();
         assertTrue(text.contains("match=3 cleanup complete"));
@@ -41,6 +44,7 @@ public class CrashReportTest {
         AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
         assertNotNull(dialog);
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+        shadowOf(Looper.getMainLooper()).idle();
         ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
         assertTrue(clipboard.getPrimaryClip().getItemAt(0).getText().toString().contains("(vacio)"));
         dialog.dismiss();
