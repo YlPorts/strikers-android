@@ -4,6 +4,7 @@ import android.content.Context;
 import android.view.SurfaceHolder;
 
 import com.ylports.strikers.RunLog;
+import com.ylports.strikers.StrikersActivity;
 
 import org.libsdl.app.SDLSurface;
 
@@ -42,6 +43,9 @@ public class AuroraSurface extends SDLSurface {
         super.surfaceChanged(holder, format, width, height);
         RunLog.append(getContext(), "AuroraSurface: SDL ready=" + mIsSurfaceReady);
         nativeSetSurfaceReady(mIsSurfaceReady);
+        if (getContext() instanceof StrikersActivity) {
+            ((StrikersActivity) getContext()).onNativeSurfaceChanged();
+        }
         RunLog.append(getContext(), "AuroraSurface: surfaceChanged end");
     }
 }

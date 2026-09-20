@@ -509,8 +509,26 @@ unsigned long cCharacterSFX::PlayRandomCharDialogue(CharDialogueType dType, PosU
     sfxAtr.Init();
     sfxAtr.me_ClassType = 1;
 
-    s32 baseIndex = charDialogueSFXInfo[dType].charDialogueSFXIndex;
-    s32 numRandom = charDialogueSFXInfo[dType].numRandomSFX;
+    const int dialogueTypeIndex = static_cast<int>(dType);
+    const int dialogueTypeCount = static_cast<int>(sizeof(charDialogueSFXInfo) / sizeof(charDialogueSFXInfo[0]));
+    const int dialogueSfxCount = static_cast<int>(sizeof(charDialogueSFX) / sizeof(charDialogueSFX[0]));
+
+    // The original decomp used charDialogueSFX[baseIndex + numRandom] as an
+    // end sentinel. For CHAR_CLAP the range ends at the physical end of the
+    // 29-entry table, so that expression reads element 29 out of bounds. On
+    // Android/arm64 the garbage value can make the following flag-clear loop
+    // walk far beyond mCharSFX, committing anonymous pages until LMK kills us.
+    if (dialogueTypeIndex < 0 || dialogueTypeIndex >= dialogueTypeCount)
+    {
+        return -1;
+    }
+
+    s32 baseIndex = charDialogueSFXInfo[dialogueTypeIndex].charDialogueSFXIndex;
+    s32 numRandom = charDialogueSFXInfo[dialogueTypeIndex].numRandomSFX;
+    if (baseIndex < 0 || numRandom <= 0 || baseIndex >= dialogueSfxCount || numRandom > dialogueSfxCount - baseIndex)
+    {
+        return -1;
+    }
     s32 randomOffset = nlRandom(numRandom, &nlDefaultSeed);
 
     Audio::eCharSFX sfxType = charDialogueSFX[baseIndex + randomOffset];
@@ -523,7 +541,35 @@ unsigned long cCharacterSFX::PlayRandomCharDialogue(CharDialogueType dType, PosU
         }
     }
 
-    for (int i = charDialogueSFX[baseIndex]; i < (int)charDialogueSFX[baseIndex + numRandom]; i++)
+    const int firstSfx = static_cast<int>(charDialogueSFX[baseIndex]);
+    const int nextDialogueIndex = baseIndex + numRandom;
+    int endSfxExclusive = 0;
+    if (nextDialogueIndex < dialogueSfxCount)
+    {
+        // Preserve the original grouping behaviour when a following group is
+        // present: its first SFX acts as the exclusive end sentinel.
+        endSfxExclusive = static_cast<int>(charDialogueSFX[nextDialogueIndex]);
+    }
+    else
+    {
+        // Last group (CHAR_CLAP): there is no sentinel entry after the table.
+        endSfxExclusive = static_cast<int>(charDialogueSFX[dialogueSfxCount - 1]) + 1;
+    }
+
+    if (firstSfx < 0 || firstSfx >= NUM_CHARSFX)
+    {
+        return -1;
+    }
+    if (endSfxExclusive < firstSfx)
+    {
+        endSfxExclusive = firstSfx;
+    }
+    if (endSfxExclusive > NUM_CHARSFX)
+    {
+        endSfxExclusive = NUM_CHARSFX;
+    }
+
+    for (int i = firstSfx; i < endSfxExclusive; i++)
     {
         mCharSFX[i].m_unk_0x40 = false;
     }
@@ -635,8 +681,26 @@ uintptr_t cCharacterSFX::PlayRandomCharDialogue(CharDialogueType dType, Audio::S
         m_unk_0x33A0 = false;
     }
 
-    s32 baseIndex = charDialogueSFXInfo[dType].charDialogueSFXIndex;
-    s32 numRandom = charDialogueSFXInfo[dType].numRandomSFX;
+    const int dialogueTypeIndex = static_cast<int>(dType);
+    const int dialogueTypeCount = static_cast<int>(sizeof(charDialogueSFXInfo) / sizeof(charDialogueSFXInfo[0]));
+    const int dialogueSfxCount = static_cast<int>(sizeof(charDialogueSFX) / sizeof(charDialogueSFX[0]));
+
+    // The original decomp used charDialogueSFX[baseIndex + numRandom] as an
+    // end sentinel. For CHAR_CLAP the range ends at the physical end of the
+    // 29-entry table, so that expression reads element 29 out of bounds. On
+    // Android/arm64 the garbage value can make the following flag-clear loop
+    // walk far beyond mCharSFX, committing anonymous pages until LMK kills us.
+    if (dialogueTypeIndex < 0 || dialogueTypeIndex >= dialogueTypeCount)
+    {
+        return -1;
+    }
+
+    s32 baseIndex = charDialogueSFXInfo[dialogueTypeIndex].charDialogueSFXIndex;
+    s32 numRandom = charDialogueSFXInfo[dialogueTypeIndex].numRandomSFX;
+    if (baseIndex < 0 || numRandom <= 0 || baseIndex >= dialogueSfxCount || numRandom > dialogueSfxCount - baseIndex)
+    {
+        return -1;
+    }
     s32 randomIndex = nlRandom(numRandom, &nlDefaultSeed);
     eCharSFX sfxType = charDialogueSFX[baseIndex + randomIndex];
 
@@ -649,7 +713,35 @@ uintptr_t cCharacterSFX::PlayRandomCharDialogue(CharDialogueType dType, Audio::S
         }
     }
 
-    for (int i = charDialogueSFX[baseIndex]; i < (int)charDialogueSFX[baseIndex + numRandom]; i++)
+    const int firstSfx = static_cast<int>(charDialogueSFX[baseIndex]);
+    const int nextDialogueIndex = baseIndex + numRandom;
+    int endSfxExclusive = 0;
+    if (nextDialogueIndex < dialogueSfxCount)
+    {
+        // Preserve the original grouping behaviour when a following group is
+        // present: its first SFX acts as the exclusive end sentinel.
+        endSfxExclusive = static_cast<int>(charDialogueSFX[nextDialogueIndex]);
+    }
+    else
+    {
+        // Last group (CHAR_CLAP): there is no sentinel entry after the table.
+        endSfxExclusive = static_cast<int>(charDialogueSFX[dialogueSfxCount - 1]) + 1;
+    }
+
+    if (firstSfx < 0 || firstSfx >= NUM_CHARSFX)
+    {
+        return -1;
+    }
+    if (endSfxExclusive < firstSfx)
+    {
+        endSfxExclusive = firstSfx;
+    }
+    if (endSfxExclusive > NUM_CHARSFX)
+    {
+        endSfxExclusive = NUM_CHARSFX;
+    }
+
+    for (int i = firstSfx; i < endSfxExclusive; i++)
     {
         mCharSFX[i].m_unk_0x40 = false;
     }

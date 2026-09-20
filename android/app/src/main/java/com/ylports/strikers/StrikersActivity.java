@@ -16,8 +16,6 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 
-import java.lang.reflect.Field;
-
 import dev.encounter.aurora.AuroraSurface;
 import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLSurface;
@@ -32,10 +30,9 @@ public final class StrikersActivity extends SDLActivity
     private TouchControllerView touchController;
     private InputManager inputManager;
     private boolean physicalGamepadConnected;
+    private boolean autoHideTouchWithGamepad;
+    private boolean resumed;
     private Handler uiHandler;
-    private Field settingsRadiusField;
-    private float settingsRadiusNormal = -1f;
-    private boolean settingsControlHidden;
 
     static native void nativeSetTouchState(
             int buttons,
@@ -48,8 +45,8 @@ public final class StrikersActivity extends SDLActivity
 
     private final Runnable hideSettingsControlRunnable = this::hideSettingsControl;
     private final Runnable overlayRecoveryRunnable = () -> {
+        if (!resumed || isFinishing() || isDestroyed() || mBrokenLibraries) return;
         applyImmersiveMode();
-        ensureTouchOverlayAttached();
         updateTouchOverlayVisibility();
     };
 
@@ -59,8 +56,12 @@ public final class StrikersActivity extends SDLActivity
         RunLog.append(this, "SDL activity: onCreate BEFORE SDLActivity.onCreate");
         super.onCreate(savedInstanceState);
         RunLog.append(this, "SDL activity: onCreate AFTER SDLActivity.onCreate");
+        // SDL displays its own load/version error. Do not call game JNI on that path.
+        if (mBrokenLibraries) return;
 
         uiHandler = new Handler(Looper.getMainLooper());
+        autoHideTouchWithGamepad = getIntent().getBooleanExtra(
+                GameBootstrapActivity.EXTRA_AUTO_HIDE_TOUCH, false);
         applyImmersiveMode();
 
         touchController = new TouchControllerView(this);
@@ -88,6 +89,8 @@ public final class StrikersActivity extends SDLActivity
     @Override
     protected void onResume() {
         super.onResume();
+        if (mBrokenLibraries) return;
+        resumed = true;
         applyImmersiveMode();
         ensureTouchOverlayAttached();
         if (touchController != null) {
@@ -108,6 +111,8 @@ public final class StrikersActivity extends SDLActivity
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             scheduleOverlayRecovery();
+        } else if (touchController != null) {
+            touchController.releaseAll();
         }
     }
 
@@ -126,6 +131,8 @@ public final class StrikersActivity extends SDLActivity
 
     @Override
     protected void onPause() {
+        resumed = false;
+        cancelOverlayCallbacks();
         if (touchController != null) {
             touchController.releaseAll();
         }
@@ -142,16 +149,14 @@ public final class StrikersActivity extends SDLActivity
 
     @Override
     protected void onDestroy() {
-        if (uiHandler != null) {
-            uiHandler.removeCallbacks(hideSettingsControlRunnable);
-            uiHandler.removeCallbacks(overlayRecoveryRunnable);
-        }
+        resumed = false;
+        cancelOverlayCallbacks();
         if (inputManager != null) {
             inputManager.unregisterInputDeviceListener(this);
             inputManager = null;
         }
         if (touchController != null) {
-            touchController.releaseAll();
+            touchController.dispose();
         }
         super.onDestroy();
     }
@@ -172,13 +177,31 @@ public final class StrikersActivity extends SDLActivity
     }
 
     private void scheduleOverlayRecovery() {
-        if (uiHandler == null) {
+        if (uiHandler == null || !resumed || isFinishing() || isDestroyed()) {
             return;
         }
         uiHandler.removeCallbacks(overlayRecoveryRunnable);
         uiHandler.post(overlayRecoveryRunnable);
         uiHandler.postDelayed(overlayRecoveryRunnable, OVERLAY_RECOVERY_SHORT_MS);
         uiHandler.postDelayed(overlayRecoveryRunnable, OVERLAY_RECOVERY_LONG_MS);
+    }
+
+    private void cancelOverlayCallbacks() {
+        if (uiHandler != null) {
+            uiHandler.removeCallbacks(hideSettingsControlRunnable);
+            uiHandler.removeCallbacks(overlayRecoveryRunnable);
+        }
+    }
+
+    @Override
+    public void onContentChanged() {
+        super.onContentChanged();
+        scheduleOverlayRecovery();
+    }
+
+    /** Called when SDL recreates or resizes the native surface. */
+    public void onNativeSurfaceChanged() {
+        scheduleOverlayRecovery();
     }
 
     /**
@@ -204,14 +227,17 @@ public final class StrikersActivity extends SDLActivity
             contentRoot.addView(touchController, new ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT));
+            touchController.setFitsSystemWindows(false);
+            touchController.setTranslationZ(1f);
+            touchController.requestApplyInsets();
             RunLog.append(this, "SDL activity: touch overlay attached to current content root");
         }
 
-        touchController.setFitsSystemWindows(false);
-        touchController.setTranslationZ(10000f);
-        touchController.bringToFront();
-        touchController.requestLayout();
-        contentRoot.invalidate();
+        if (contentRoot.indexOfChild(touchController) != contentRoot.getChildCount() - 1) {
+            touchController.bringToFront();
+        }
+        WindowInsets insets = contentRoot.getRootWindowInsets();
+        if (insets != null) touchController.applySafeInsets(insets);
     }
 
     /**
@@ -258,23 +284,8 @@ public final class StrikersActivity extends SDLActivity
     }
 
     private void installSettingsAutoHide() {
-        try {
-            settingsRadiusField = TouchControllerView.class.getDeclaredField("settingsRadius");
-            settingsRadiusField.setAccessible(true);
-        } catch (ReflectiveOperationException e) {
-            settingsRadiusField = null;
-            RunLog.append(this, "touch settings auto-hide unavailable: " + e.getClass().getSimpleName());
-            return;
-        }
-
-        touchController.post(() -> {
-            captureSettingsRadius();
-            showSettingsControlFor(SETTINGS_AUTO_HIDE_MS);
-        });
-
         touchController.setOnTouchListener((view, event) -> {
-            if (!physicalGamepadConnected
-                    && settingsControlHidden
+            if (!touchController.isSettingsControlVisible()
                     && event.getActionMasked() == MotionEvent.ACTION_DOWN
                     && event.getX() <= view.getWidth() * 0.20f
                     && event.getY() <= view.getHeight() * 0.22f) {
@@ -284,86 +295,41 @@ public final class StrikersActivity extends SDLActivity
         });
     }
 
-    private void captureSettingsRadius() {
-        if (settingsRadiusField == null || touchController == null) {
-            return;
-        }
-        try {
-            float current = settingsRadiusField.getFloat(touchController);
-            if (current > 0f) {
-                settingsRadiusNormal = current;
-            }
-        } catch (IllegalAccessException ignored) {
-        }
-    }
-
     private void showSettingsControlFor(long delayMs) {
-        if (settingsRadiusField == null || touchController == null || uiHandler == null) {
-            return;
-        }
-        try {
-            float current = settingsRadiusField.getFloat(touchController);
-            if (current > 0f) {
-                settingsRadiusNormal = current;
-            }
-            if (settingsRadiusNormal > 0f) {
-                settingsRadiusField.setFloat(touchController, settingsRadiusNormal);
-                settingsControlHidden = false;
-                touchController.postInvalidateOnAnimation();
-            }
-        } catch (IllegalAccessException ignored) {
-        }
+        if (touchController == null || uiHandler == null || !resumed) return;
+        touchController.setSettingsControlVisible(true);
         uiHandler.removeCallbacks(hideSettingsControlRunnable);
-        if (!physicalGamepadConnected) {
-            uiHandler.postDelayed(hideSettingsControlRunnable, delayMs);
-        }
+        uiHandler.postDelayed(hideSettingsControlRunnable, delayMs);
     }
 
     private void hideSettingsControl() {
-        if (settingsRadiusField == null || touchController == null || physicalGamepadConnected) {
-            return;
-        }
-        try {
-            float current = settingsRadiusField.getFloat(touchController);
-            if (current > 0f) {
-                settingsRadiusNormal = current;
-            }
-            settingsRadiusField.setFloat(touchController, 0f);
-            settingsControlHidden = true;
-            touchController.postInvalidateOnAnimation();
-        } catch (IllegalAccessException ignored) {
+        if (touchController != null && resumed) {
+            touchController.setSettingsControlVisible(false);
         }
     }
 
     private void updateTouchOverlayVisibility() {
-        if (touchController == null) {
-            return;
-        }
+        if (touchController == null || !resumed || isFinishing() || isDestroyed()) return;
 
         ensureTouchOverlayAttached();
         boolean connected = hasPhysicalGamepad();
         if (connected != physicalGamepadConnected) {
             physicalGamepadConnected = connected;
-            RunLog.append(this, connected
-                    ? "SDL activity: real physical/Bluetooth gamepad detected; touch overlay hidden"
-                    : "SDL activity: gamepad disconnected; touch overlay restored");
+            RunLog.append(this, "SDL activity: physical gamepad connected=" + connected);
         }
 
-        if (connected) {
-            if (uiHandler != null) {
-                uiHandler.removeCallbacks(hideSettingsControlRunnable);
-            }
+        // Some phones expose internal input devices as gamepads. Keep touch usable
+        // unless the player explicitly chose automatic hiding in the launcher.
+        boolean hide = autoHideTouchWithGamepad && connected;
+        int visibility = hide ? View.GONE : View.VISIBLE;
+        if (touchController.getVisibility() != visibility) {
             touchController.releaseAll();
-            touchController.setVisibility(View.GONE);
+            touchController.setVisibility(visibility);
+        }
+        if (hide) {
+            uiHandler.removeCallbacks(hideSettingsControlRunnable);
         } else {
-            touchController.setVisibility(View.VISIBLE);
-            touchController.setAlpha(1f);
-            touchController.setEnabled(true);
-            touchController.bringToFront();
-            captureSettingsRadius();
             showSettingsControlFor(SETTINGS_AUTO_HIDE_MS);
-            touchController.requestLayout();
-            touchController.postInvalidateOnAnimation();
         }
     }
 

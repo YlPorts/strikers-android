@@ -11,6 +11,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -25,6 +26,7 @@ public final class MainActivity extends Activity {
     static final String PREF_GAME_URI = "game_image_uri";
     static final String PREF_LANGUAGE = "game_language";
     static final String PREF_RESOLUTION_ROWS = "render_rows";
+    static final String PREF_AUTO_HIDE_TOUCH = "auto_hide_touch_with_gamepad";
 
     private static final String[] LANGUAGE_LABELS = {
             "English", "Español", "Français", "Deutsch", "Italiano"
@@ -46,6 +48,8 @@ public final class MainActivity extends Activity {
     private Spinner resolutionSpinner;
     private Button chooseGameButton;
     private Button playGameButton;
+    private CheckBox autoHideTouch;
+    private boolean launchPending;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,6 +66,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        launchPending = false;
         updateLauncherControls();
     }
 
@@ -109,6 +114,12 @@ public final class MainActivity extends Activity {
                 prefs.getString(PREF_LANGUAGE, "english")));
         resolutionSpinner.setSelection(resolutionIndex(
                 prefs.getInt(PREF_RESOLUTION_ROWS, 720)));
+
+        autoHideTouch = new CheckBox(this);
+        autoHideTouch.setText("Ocultar botones táctiles al conectar un mando");
+        autoHideTouch.setTextColor(Color.WHITE);
+        autoHideTouch.setChecked(prefs.getBoolean(PREF_AUTO_HIDE_TOUCH, false));
+        root.addView(autoHideTouch, selectorParams());
 
         chooseGameButton = new Button(this);
         chooseGameButton.setAllCaps(false);
@@ -159,7 +170,7 @@ public final class MainActivity extends Activity {
             chooseGameButton.setText(hasGame ? "Cambiar ROM" : "Seleccionar ROM");
         }
         if (playGameButton != null) {
-            playGameButton.setEnabled(hasGame);
+            playGameButton.setEnabled(hasGame && !launchPending);
         }
     }
 
@@ -210,6 +221,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean launchGame() {
+        if (launchPending) return false;
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         String saved = prefs.getString(PREF_GAME_URI, null);
         if (saved == null) {
@@ -233,6 +245,7 @@ public final class MainActivity extends Activity {
         prefs.edit()
                 .putString(PREF_LANGUAGE, language)
                 .putInt(PREF_RESOLUTION_ROWS, rows)
+                .putBoolean(PREF_AUTO_HIDE_TOUCH, autoHideTouch.isChecked())
                 .apply();
 
         RunLog.reset(this, "launcher: Jugar; language=" + language
@@ -243,12 +256,17 @@ public final class MainActivity extends Activity {
         game.putExtra(GameBootstrapActivity.EXTRA_GAME_URI, saved);
         game.putExtra(GameBootstrapActivity.EXTRA_LANGUAGE, language);
         game.putExtra(GameBootstrapActivity.EXTRA_RENDER_ROWS, rows);
+        game.putExtra(GameBootstrapActivity.EXTRA_AUTO_HIDE_TOUCH, autoHideTouch.isChecked());
         game.setData(Uri.parse(saved));
         game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
+            launchPending = true;
+            updateLauncherControls();
             startActivity(game);
             return true;
         } catch (Exception e) {
+            launchPending = false;
+            updateLauncherControls();
             RunLog.append(this, "launcher: startActivity failed: "
                     + e.getClass().getSimpleName() + ": " + e.getMessage());
             Toast.makeText(this, "No se pudo iniciar el juego.", Toast.LENGTH_LONG).show();

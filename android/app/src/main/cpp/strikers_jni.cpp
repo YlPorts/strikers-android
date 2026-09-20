@@ -12,6 +12,7 @@
 #include <dolphin/pad.h>
 
 #include "port/disc.h"
+#include "touch_state.h"
 
 namespace {
 constexpr const char* kLogTag = "StrikersAndroid";
@@ -21,13 +22,9 @@ std::string g_filesDir;
 // Android MotionEvents arrive on the UI thread while PADRead runs on the game
 // thread. Keep the JNI side lock-free and copy a coherent snapshot into Aurora's
 // virtual PAD immediately before the game's sampling callback each frame.
-std::atomic<int> g_touchButtons{0};
-std::atomic<int> g_touchStickX{0};
-std::atomic<int> g_touchStickY{0};
-std::atomic<int> g_touchSubstickX{0};
-std::atomic<int> g_touchSubstickY{0};
-std::atomic<int> g_touchTriggerLeft{0};
-std::atomic<int> g_touchTriggerRight{0};
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
+              "Android touch snapshots must be lock-free on the target ABI");
+std::atomic<std::uint64_t> g_touchState{0};
 
 std::string JStringToUtf8(JNIEnv* env, jstring value) {
     if (value == nullptr) {
@@ -207,14 +204,15 @@ Java_com_ylports_strikers_GameBootstrapActivity_nativeBeginRunLog(
 // VBlankPadUpdate/PADRead. This removes the UI-thread/PADRead data race that can
 // otherwise make analog motion intermittent while still merging with real pads.
 extern "C" void PortAndroidApplyTouchState(void) {
+    const auto touch = strikers::touch::Unpack(g_touchState.load(std::memory_order_relaxed));
     PADStatus status{};
-    status.button = static_cast<u16>(g_touchButtons.load(std::memory_order_acquire) & 0xFFFF);
-    status.stickX = ClampAxis(g_touchStickX.load(std::memory_order_relaxed));
-    status.stickY = ClampAxis(g_touchStickY.load(std::memory_order_relaxed));
-    status.substickX = ClampAxis(g_touchSubstickX.load(std::memory_order_relaxed));
-    status.substickY = ClampAxis(g_touchSubstickY.load(std::memory_order_relaxed));
-    status.triggerLeft = ClampTrigger(g_touchTriggerLeft.load(std::memory_order_relaxed));
-    status.triggerRight = ClampTrigger(g_touchTriggerRight.load(std::memory_order_relaxed));
+    status.button = static_cast<u16>(touch.buttons);
+    status.stickX = ClampAxis(touch.stickX);
+    status.stickY = ClampAxis(touch.stickY);
+    status.substickX = ClampAxis(touch.substickX);
+    status.substickY = ClampAxis(touch.substickY);
+    status.triggerLeft = ClampTrigger(touch.triggerLeft);
+    status.triggerRight = ClampTrigger(touch.triggerRight);
     status.analogA = (status.button & PAD_BUTTON_A) != 0 ? 255 : 0;
     status.analogB = (status.button & PAD_BUTTON_B) != 0 ? 255 : 0;
     status.err = PAD_ERR_NONE;
@@ -227,15 +225,8 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_ylports_strikers_StrikersActivity_nativeSetTouchState(
         JNIEnv*, jclass, jint buttons, jint stick_x, jint stick_y,
         jint substick_x, jint substick_y, jint trigger_left, jint trigger_right) {
-    g_touchStickX.store(static_cast<int>(ClampAxis(stick_x)), std::memory_order_relaxed);
-    g_touchStickY.store(static_cast<int>(ClampAxis(stick_y)), std::memory_order_relaxed);
-    g_touchSubstickX.store(static_cast<int>(ClampAxis(substick_x)), std::memory_order_relaxed);
-    g_touchSubstickY.store(static_cast<int>(ClampAxis(substick_y)), std::memory_order_relaxed);
-    g_touchTriggerLeft.store(static_cast<int>(ClampTrigger(trigger_left)), std::memory_order_relaxed);
-    g_touchTriggerRight.store(static_cast<int>(ClampTrigger(trigger_right)), std::memory_order_relaxed);
-    // Publish buttons last so the acquire on the game thread sees the axis values
-    // from the same or an older complete UI update, never a partially-written struct.
-    g_touchButtons.store(static_cast<int>(buttons & 0xFFFF), std::memory_order_release);
+    g_touchState.store(strikers::touch::Pack({buttons, stick_x, stick_y,
+            substick_x, substick_y, trigger_left, trigger_right}), std::memory_order_relaxed);
 }
 
 // Do not define JNI_OnLoad here. SDL3's Android backend owns JNI_OnLoad and uses

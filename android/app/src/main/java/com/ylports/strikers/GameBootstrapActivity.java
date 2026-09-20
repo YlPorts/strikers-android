@@ -32,6 +32,7 @@ public final class GameBootstrapActivity extends Activity {
     public static final String EXTRA_GAME_URI = "com.ylports.strikers.GAME_URI";
     public static final String EXTRA_LANGUAGE = "com.ylports.strikers.LANGUAGE";
     public static final String EXTRA_RENDER_ROWS = "com.ylports.strikers.RENDER_ROWS";
+    public static final String EXTRA_AUTO_HIDE_TOUCH = "com.ylports.strikers.AUTO_HIDE_TOUCH";
     public static final String LAST_RUN_LOG = RunLog.FILE_NAME;
 
     // Keep the descriptor alive for the lifetime of the :game process. libstrikers.so duplicates
@@ -198,7 +199,13 @@ public final class GameBootstrapActivity extends Activity {
 
             Intent nativeGame = new Intent();
             nativeGame.setClassName(getPackageName(), getPackageName() + ".StrikersActivity");
+            nativeGame.putExtra(EXTRA_AUTO_HIDE_TOUCH,
+                    getIntent().getBooleanExtra(EXTRA_AUTO_HIDE_TOUCH, false));
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) {
+                    closeGameImageFd();
+                    return;
+                }
                 try {
                     RunLog.append(this, "bootstrap: starting StrikersActivity");
                     startActivity(nativeGame);
