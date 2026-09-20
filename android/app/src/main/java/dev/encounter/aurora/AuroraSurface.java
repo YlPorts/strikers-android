@@ -44,7 +44,7 @@ public class AuroraSurface extends SDLSurface {
         RunLog.append(getContext(), "AuroraSurface: SDL ready=" + mIsSurfaceReady);
         nativeSetSurfaceReady(mIsSurfaceReady);
         if (getContext() instanceof StrikersActivity) {
-            ((StrikersActivity) getContext()).onNativeSurfaceChanged();
+            ((StrikersActivity) getContext()).recoverTouchOverlayAfterSurfaceChange();
         }
         RunLog.append(getContext(), "AuroraSurface: surfaceChanged end");
     }

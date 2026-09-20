@@ -200,7 +200,7 @@ public final class StrikersActivity extends SDLActivity
     }
 
     /** Called when SDL recreates or resizes the native surface. */
-    public void onNativeSurfaceChanged() {
+    public void recoverTouchOverlayAfterSurfaceChange() {
         scheduleOverlayRecovery();
     }
 
