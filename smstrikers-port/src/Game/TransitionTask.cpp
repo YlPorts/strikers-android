@@ -81,6 +81,21 @@
 #include "Game/Sys/debug.h"
 #include "dolphin/os.h"
 #include "Game/main.h"
+#if defined(__ANDROID__)
+#include "port/host.h"
+
+static unsigned int s_androidMatchCount;
+static void LogAndroidMatchMemory(const char* phase)
+{
+    size_t regionUsed = 0, regionSize = 0;
+    port_region_stats(&regionUsed, &regionSize);
+    // This is the allocator's high-water reservation, not resident RAM.
+    // Pair these transition markers with the sparse [memdiag] RSS samples.
+    OSReport("[session] match=%u %s region_handed_out=%luKB capacity=%luKB\n",
+             s_androidMatchCount, phase, (unsigned long)(regionUsed / 1024),
+             (unsigned long)(regionSize / 1024));
+}
+#endif
 
 int nlSNPrintf(char*, unsigned long, const char*, ...);
 
@@ -543,6 +558,10 @@ void TransitionTask::StateTransition(unsigned int from, unsigned int to)
 void TransitionTask::InitializeGameState()
 {
     m_TransitionState = eTS_Initializing;
+#if defined(__ANDROID__)
+    ++s_androidMatchCount;
+    LogAndroidMatchMemory("loading");
+#endif
 
     tDebugPrintManager::Print(DC_MEMORY, "-- Memory upon Entering InitializeGameState \n");
     tDebugPrintManager::Print(DC_MEMORY, "Free Memory: %u\n", StandardAllocator.TotalFreeMemory());
@@ -719,6 +738,9 @@ void TransitionTask::InitializeGameState()
     OSReport("-----------------------------------------\n\n");
 
     TakeGameMemSnapshot::ResetTimers();
+#if defined(__ANDROID__)
+    LogAndroidMatchMemory("ready");
+#endif
     InitializeTimeRegions();
 
     m_TransitionState = eTS_InState;
@@ -857,6 +879,10 @@ void TransitionTask::DestroyGameState()
     gSebringLoadPackageToVirtualMemory = 0;
 
     CompactSlotPools();
+
+#if defined(__ANDROID__)
+    LogAndroidMatchMemory("cleanup complete");
+#endif
 
     m_TransitionState = eTS_Unknown;
 }

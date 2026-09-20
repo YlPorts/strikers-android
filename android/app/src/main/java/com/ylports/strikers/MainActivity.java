@@ -27,6 +27,7 @@ public final class MainActivity extends Activity {
     static final String PREF_LANGUAGE = "game_language";
     static final String PREF_RESOLUTION_ROWS = "render_rows";
     static final String PREF_AUTO_HIDE_TOUCH = "auto_hide_touch_with_gamepad";
+    static final String PREF_TARGET_FPS = "target_fps";
 
     private static final String[] LANGUAGE_LABELS = {
             "English", "Español", "Français", "Deutsch", "Italiano"
@@ -37,8 +38,8 @@ public final class MainActivity extends Activity {
 
     private static final String[] RESOLUTION_LABELS = {
             "448p · rendimiento",
-            "720p · recomendado",
-            "900p · equilibrado",
+            "720p · equilibrado",
+            "900p · calidad",
             "1080p · calidad",
             "Auto · pantalla"
     };
@@ -46,6 +47,7 @@ public final class MainActivity extends Activity {
 
     private Spinner languageSpinner;
     private Spinner resolutionSpinner;
+    private Spinner frameRateSpinner;
     private Button chooseGameButton;
     private Button playGameButton;
     private CheckBox autoHideTouch;
@@ -115,6 +117,22 @@ public final class MainActivity extends Activity {
         resolutionSpinner.setSelection(resolutionIndex(
                 prefs.getInt(PREF_RESOLUTION_ROWS, 720)));
 
+        TextView performanceHint = new TextView(this);
+        performanceHint.setText("Si se calienta o hay tirones, prueba 448p y 60 FPS para reducir la carga.");
+        performanceHint.setTextColor(Color.LTGRAY);
+        performanceHint.setTextSize(13f);
+        root.addView(performanceHint, selectorParams());
+
+        addSectionLabel(root, "Límite de fotogramas");
+        frameRateSpinner = new Spinner(this);
+        ArrayAdapter<String> frameRateAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item,
+                new String[]{"60 FPS · sesiones largas", "120 FPS · mayor fluidez y consumo"});
+        frameRateAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        frameRateSpinner.setAdapter(frameRateAdapter);
+        frameRateSpinner.setSelection(prefs.getInt(PREF_TARGET_FPS, 60) == 120 ? 1 : 0);
+        root.addView(frameRateSpinner, selectorParams());
+
         autoHideTouch = new CheckBox(this);
         autoHideTouch.setText("Ocultar botones táctiles al conectar un mando");
         autoHideTouch.setTextColor(Color.WHITE);
@@ -135,6 +153,12 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams playParams = buttonParams();
         playParams.topMargin = dp(10);
         root.addView(playGameButton, playParams);
+
+        Button diagnosticsButton = new Button(this);
+        diagnosticsButton.setText("Informe de diagnóstico");
+        diagnosticsButton.setAllCaps(false);
+        diagnosticsButton.setOnClickListener(v -> CrashReport.showLatest(this));
+        root.addView(diagnosticsButton, buttonParams());
 
         updateLauncherControls();
         return scroll;
@@ -242,20 +266,23 @@ public final class MainActivity extends Activity {
 
         String language = LANGUAGE_VALUES[languageIndex];
         int rows = RESOLUTION_ROWS[resolutionIndex];
+        int targetFps = frameRateSpinner.getSelectedItemPosition() == 1 ? 120 : 60;
         prefs.edit()
                 .putString(PREF_LANGUAGE, language)
                 .putInt(PREF_RESOLUTION_ROWS, rows)
+                .putInt(PREF_TARGET_FPS, targetFps)
                 .putBoolean(PREF_AUTO_HIDE_TOUCH, autoHideTouch.isChecked())
                 .apply();
 
         RunLog.reset(this, "launcher: Jugar; language=" + language
-                + " render_rows=" + (rows == 0 ? "auto" : rows));
+                + " render_rows=" + (rows == 0 ? "auto" : rows) + " fps_limit=" + targetFps);
 
         Intent game = new Intent();
         game.setClassName(getPackageName(), getPackageName() + ".GameBootstrapActivity");
         game.putExtra(GameBootstrapActivity.EXTRA_GAME_URI, saved);
         game.putExtra(GameBootstrapActivity.EXTRA_LANGUAGE, language);
         game.putExtra(GameBootstrapActivity.EXTRA_RENDER_ROWS, rows);
+        game.putExtra(GameBootstrapActivity.EXTRA_TARGET_FPS, targetFps);
         game.putExtra(GameBootstrapActivity.EXTRA_AUTO_HIDE_TOUCH, autoHideTouch.isChecked());
         game.setData(Uri.parse(saved));
         game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);

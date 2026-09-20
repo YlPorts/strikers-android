@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
@@ -26,6 +27,11 @@
 #include <absl/container/flat_hash_set.h>
 #include <fmt/format.h>
 #include <tracy/Tracy.hpp>
+
+#if defined(__ANDROID__)
+// Optional host UI hook: show real compilation waits while the game cannot draw.
+extern "C" void PortAndroidSetShaderWait(int active) __attribute__((weak));
+#endif
 
 namespace aurora::gfx {
 static Module Log("aurora::gfx::pipeline_cache");
@@ -539,6 +545,10 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
   }
 
   if (blocking && !pipelineReady) {
+#if defined(__ANDROID__)
+    const auto waitStart = std::chrono::steady_clock::now();
+    if (PortAndroidSetShaderWait) PortAndroidSetShaderWait(1);
+#endif
     std::unique_lock lock{g_pipelineMutex};
     g_pipelineReadyCv.wait(lock, [=] { return g_pipelines.contains(hash) || g_pipelineThreadEnd; });
     auto pipelineIt = g_pipelines.find(hash);
@@ -546,6 +556,12 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
       pipelineIt->second.firstFrameUsed = firstFrameUsed;
       cacheWrite = make_pipeline_cache_write(type, hash, config, firstFrameUsed);
     }
+#if defined(__ANDROID__)
+    if (PortAndroidSetShaderWait) PortAndroidSetShaderWait(0);
+    const auto waitMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - waitStart).count();
+    if (waitMs >= 100) Log.info("[load] graphics preparation waited {} ms", waitMs);
+#endif
   }
 
   if (cacheWrite) {

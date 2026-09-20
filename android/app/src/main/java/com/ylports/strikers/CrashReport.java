@@ -33,8 +33,14 @@ final class CrashReport {
     private CrashReport() {
     }
 
+    static void showLatest(Activity activity) {
+        if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+        String log = readTail(RunLog.file(activity), MAX_LOG_BYTES);
+        showDialog(activity, buildReport(activity, findLatestGameExit(activity), log));
+    }
+
     static void scheduleCheck(Activity activity) {
-        if (activity == null || Build.VERSION.SDK_INT < 30) {
+        if (activity == null) {
             return;
         }
         Handler handler = new Handler(Looper.getMainLooper());
@@ -69,7 +75,7 @@ final class CrashReport {
         }
 
         long exitTimestamp = latest != null ? latest.getTimestamp() : 0L;
-        String report = buildReport(latest, log);
+        String report = buildReport(activity, latest, log);
         prefs.edit()
                 .putLong(PREF_LAST_EXIT_SHOWN, Math.max(lastExitShown, exitTimestamp))
                 .putLong(PREF_LAST_LOG_MTIME_SHOWN, Math.max(lastLogMtimeShown, logMtime))
@@ -79,6 +85,7 @@ final class CrashReport {
     }
 
     private static ApplicationExitInfo findLatestGameExit(Context context) {
+        if (Build.VERSION.SDK_INT < 30) return null;
         ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
         if (manager == null) {
             return null;
@@ -111,10 +118,18 @@ final class CrashReport {
                 || reason == ApplicationExitInfo.REASON_LOW_MEMORY;
     }
 
-    private static String buildReport(ApplicationExitInfo exit, String log) {
+    private static String buildReport(Context context, ApplicationExitInfo exit, String log) {
         StringBuilder out = new StringBuilder(32768);
-        out.append("STRIKERS ANDROID - INFORME DE CIERRE\n");
+        out.append("STRIKERS ANDROID - INFORME DE DIAGNOSTICO\n");
         out.append("Copia este informe completo y envialo en el chat.\n\n");
+        try {
+            out.append("version: ").append(context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0).versionName).append('\n');
+        } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
+        }
+        out.append("dispositivo: ").append(Build.MANUFACTURER).append(' ')
+                .append(Build.MODEL).append(" Android ").append(Build.VERSION.RELEASE)
+                .append(" (API ").append(Build.VERSION.SDK_INT).append(")\n\n");
 
         if (exit != null) {
             out.append("=== Android ApplicationExitInfo ===\n");
@@ -213,7 +228,7 @@ final class CrashReport {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
         AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setTitle("El juego se cerro - informe de diagnostico")
+                .setTitle("Informe de diagnóstico")
                 .setView(scroll)
                 .setPositiveButton("Copiar informe", (d, which) -> {
                     ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);

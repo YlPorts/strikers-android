@@ -242,9 +242,20 @@ void VIWaitForRetrace(void)
     {
         static u64 next_deadline;
         u64 t = now_ns();
+#if defined(__ANDROID__)
+        if (next_deadline == 0)
+            next_deadline = t;
+        next_deadline += period;
+        // A slow frame already used its budget. Rebase here instead of running
+        // several unslept frames to catch up, which adds heat and uneven pacing.
+        // Do not add another full wait to the slow frame or alter simulation dt.
+        if (next_deadline < t)
+            next_deadline = t;
+#else
         if (next_deadline == 0 || t > next_deadline + period * 4)
             next_deadline = t;                   // first call, or badly behind
         next_deadline += period;
+#endif
 
         if (next_deadline > t)
         {

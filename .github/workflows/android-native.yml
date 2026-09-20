@@ -53,12 +53,17 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      - name: Android control regression tests
+      - name: Android regression tests
         shell: bash
         run: |
           set -o pipefail
           g++ -std=c++17 -Wall -Wextra -Werror -pthread -fsanitize=undefined android/tests/touch_state_test.cpp -o /tmp/touch-state-test
           /tmp/touch-state-test
+          cc -std=c11 -D_POSIX_C_SOURCE=200809L -D__ANDROID__ -Wall -Wextra -Werror -fsanitize=undefined \
+            -Ismstrikers-port/include android/tests/frame_pacing_test.c smstrikers-port/src/platform/vi.c \
+            -o /tmp/frame-pacing-test
+          /tmp/frame-pacing-test
+          /tmp/frame-pacing-test 120
           gradle --no-daemon -p android :app:testReleaseUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
 
       - name: Preserve control test results

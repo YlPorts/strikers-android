@@ -2,7 +2,6 @@ package com.ylports.strikers;
 
 import android.app.Activity;
 import android.app.Application;
-import android.os.Build;
 import android.os.Bundle;
 import android.system.Os;
 
@@ -19,7 +18,6 @@ public final class DiagnosticApplication extends Application
         // processes. Exporting the diagnostic switches here means the native
         // core sees them before SDL/libstrikers is loaded.
         try {
-            Os.setenv("STRIKERS_LOG_NIS", "1", true);
             Os.setenv("STRIKERS_DIAGNOSTIC_BUILD", "1", true);
         } catch (Throwable ignored) {
         }
@@ -27,7 +25,7 @@ public final class DiagnosticApplication extends Application
 
     @Override
     public void onActivityResumed(Activity activity) {
-        if (Build.VERSION.SDK_INT >= 30 && activity instanceof MainActivity) {
+        if (activity instanceof MainActivity) {
             CrashReport.scheduleCheck(activity);
         }
     }

@@ -33,6 +33,7 @@ public final class GameBootstrapActivity extends Activity {
     public static final String EXTRA_LANGUAGE = "com.ylports.strikers.LANGUAGE";
     public static final String EXTRA_RENDER_ROWS = "com.ylports.strikers.RENDER_ROWS";
     public static final String EXTRA_AUTO_HIDE_TOUCH = "com.ylports.strikers.AUTO_HIDE_TOUCH";
+    public static final String EXTRA_TARGET_FPS = "com.ylports.strikers.TARGET_FPS";
     public static final String LAST_RUN_LOG = RunLog.FILE_NAME;
 
     // Keep the descriptor alive for the lifetime of the :game process. libstrikers.so duplicates
@@ -141,10 +142,18 @@ public final class GameBootstrapActivity extends Activity {
             // but exporting them here prevents a stray packaged config from turning on
             // expensive 4x MSAA on a phone.
             Os.setenv("STRIKERS_MSAA", "1", true);
+            // A fast panel does not automatically double rendering workload.
+            // Keep 120 available by choice; the simulation retains its own clock.
+            int requestedFps = getIntent().getIntExtra(EXTRA_TARGET_FPS,
+                    prefs.getInt(MainActivity.PREF_TARGET_FPS, 60));
+            int targetFps = requestedFps == 120 ? 120 : 60;
+            Os.setenv("STRIKERS_FPS_LIMIT", Integer.toString(targetFps), true);
+            Os.setenv("STRIKERS_VSYNC", "1", true);
 
             RunLog.append(this, "bootstrap: settings language=" + language
                     + " render=" + renderRows + "p (" + resolutionMode + ", scale="
-                    + String.format(Locale.US, "%.3f", renderScale) + "x) msaa=1");
+                    + String.format(Locale.US, "%.3f", renderScale) + "x) msaa=1 fps_limit="
+                    + targetFps + " vsync=1");
             RunLog.append(this, "bootstrap: native environment and early crash log exported before library load");
 
             try {
@@ -202,6 +211,7 @@ public final class GameBootstrapActivity extends Activity {
             nativeGame.setClassName(getPackageName(), getPackageName() + ".StrikersActivity");
             nativeGame.putExtra(EXTRA_AUTO_HIDE_TOUCH,
                     getIntent().getBooleanExtra(EXTRA_AUTO_HIDE_TOUCH, false));
+            nativeGame.putExtra(EXTRA_TARGET_FPS, targetFps);
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) {
                     return;

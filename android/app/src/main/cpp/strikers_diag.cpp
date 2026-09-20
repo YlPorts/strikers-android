@@ -159,12 +159,13 @@ static void log_memory_snapshot()
 
 static void* memory_thread_main(void*)
 {
-    // 250 ms is frequent enough to catch a sudden cinematic allocation burst while
-    // keeping last-run.log small enough that nearby NIS breadcrumbs remain visible.
+    // Session-level memory trend, not a profiler: one sample every five seconds
+    // avoids four /proc reads and file opens/writes per second during gameplay.
+    // The signal handler still captures faults immediately.
     for (;;)
     {
         log_memory_snapshot();
-        usleep(250000);
+        usleep(5000000);
     }
     return nullptr;
 }

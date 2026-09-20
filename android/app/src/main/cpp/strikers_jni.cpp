@@ -12,6 +12,7 @@
 #include <dolphin/pad.h>
 
 #include "port/disc.h"
+#include "port/android_loading.h"
 #include "touch_state.h"
 
 namespace {
@@ -25,6 +26,7 @@ std::string g_filesDir;
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
               "Android touch snapshots must be lock-free on the target ABI");
 std::atomic<std::uint64_t> g_touchState{0};
+std::atomic<unsigned int> g_loadingState{0};
 
 std::string JStringToUtf8(JNIEnv* env, jstring value) {
     if (value == nullptr) {
@@ -227,6 +229,21 @@ Java_com_ylports_strikers_StrikersActivity_nativeSetTouchState(
         jint substick_x, jint substick_y, jint trigger_left, jint trigger_right) {
     g_touchState.store(strikers::touch::Pack({buttons, stick_x, stick_y,
             substick_x, substick_y, trigger_left, trigger_right}), std::memory_order_relaxed);
+}
+
+extern "C" void PortAndroidSetLoadActive(int active) {
+    if (active) g_loadingState.fetch_or(1u, std::memory_order_relaxed);
+    else g_loadingState.fetch_and(~1u, std::memory_order_relaxed);
+}
+
+extern "C" void PortAndroidSetShaderWait(int active) {
+    if (active) g_loadingState.fetch_or(2u, std::memory_order_relaxed);
+    else g_loadingState.fetch_and(~2u, std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_ylports_strikers_StrikersActivity_nativeGetLoadingState(JNIEnv*, jclass) {
+    return static_cast<jint>(g_loadingState.load(std::memory_order_relaxed));
 }
 
 // Do not define JNI_OnLoad here. SDL3's Android backend owns JNI_OnLoad and uses

@@ -2,6 +2,16 @@
 #include "Game/Sys/debug.h"
 #include "NL/nlMemory.h"
 #include "NL/nlTicker.h"
+#include "port/android_loading.h"
+
+static void SetAndroidLoading(bool active)
+{
+#if defined(__ANDROID__)
+    if (PortAndroidSetLoadActive) PortAndroidSetLoadActive(active ? 1 : 0);
+#else
+    (void)active;
+#endif
+}
 
 /**
  * Offset/Address/Size: 0x338 | 0x801E855C | size: 0x70
@@ -55,6 +65,7 @@ void LoadingManager::Run(float dt)
         if (m_NumEntries == 0)
         {
             m_LoadFinished = 1;
+            SetAndroidLoading(false);
             return;
         }
         tDebugPrintManager::Print(DC_LOADER, "LoadingManager: Starting loader: %s\n", m_LoaderQueue[m_CurrEntry]->GetName());
@@ -80,10 +91,12 @@ void LoadingManager::QueueLoader(Loader* loader)
 
     if (m_NumEntries == 0)
     {
+        SetAndroidLoading(true);
         tDebugPrintManager::Print(DC_LOADER, "LoadingManager: Starting loader: %s\n", loader->GetName());
         if (loader->StartLoad(this))
         {
             shouldQueue = false;
+            if (m_NumEntries == 0) SetAndroidLoading(false);
         }
     }
 
