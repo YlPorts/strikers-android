@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
@@ -27,11 +26,6 @@
 #include <absl/container/flat_hash_set.h>
 #include <fmt/format.h>
 #include <tracy/Tracy.hpp>
-
-#if defined(__ANDROID__)
-// Optional host UI hook: show real compilation waits while the game cannot draw.
-extern "C" void PortAndroidSetShaderWait(int active) __attribute__((weak));
-#endif
 
 namespace aurora::gfx {
 static Module Log("aurora::gfx::pipeline_cache");
@@ -375,13 +369,19 @@ static auto find_pending_pipeline(Queue& queue, PipelineRef hash) {
 
 enum class PipelinePriority {
   Background, // loaded from cache
-  Normal,     // async skip draw
+  Normal,     // async; Android waits when binding, desktop may skip draw
   Blocking,   // block until compiled
 };
 
 static PendingPipeline* touch_pending_pipeline(PipelineRef hash, PipelinePriority priority) {
   auto priorityIt = find_pending_pipeline(g_pipelineQueue, hash);
   if (priorityIt != g_pipelineQueue.end()) {
+    if (priority == PipelinePriority::Blocking && priorityIt != g_pipelineQueue.begin()) {
+      PendingPipeline pending = std::move(*priorityIt);
+      g_pipelineQueue.erase(priorityIt);
+      g_pipelineQueue.emplace_front(std::move(pending));
+      return &g_pipelineQueue.front();
+    }
     return &*priorityIt;
   }
 
@@ -545,10 +545,6 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
   }
 
   if (blocking && !pipelineReady) {
-#if defined(__ANDROID__)
-    const auto waitStart = std::chrono::steady_clock::now();
-    if (PortAndroidSetShaderWait) PortAndroidSetShaderWait(1);
-#endif
     std::unique_lock lock{g_pipelineMutex};
     g_pipelineReadyCv.wait(lock, [=] { return g_pipelines.contains(hash) || g_pipelineThreadEnd; });
     auto pipelineIt = g_pipelines.find(hash);
@@ -556,12 +552,6 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
       pipelineIt->second.firstFrameUsed = firstFrameUsed;
       cacheWrite = make_pipeline_cache_write(type, hash, config, firstFrameUsed);
     }
-#if defined(__ANDROID__)
-    if (PortAndroidSetShaderWait) PortAndroidSetShaderWait(0);
-    const auto waitMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - waitStart).count();
-    if (waitMs >= 100) Log.info("[load] graphics preparation waited {} ms", waitMs);
-#endif
   }
 
   if (cacheWrite) {
@@ -1117,18 +1107,22 @@ static void stop_pipeline_cache_writer() {
 
 template <>
 PipelineRef find_pipeline(ShaderType type, const clear::PipelineConfig& config, NewPipelineCallback&& cb) {
+#if defined(__ANDROID__)
+  return find_pipeline_impl(type, config, std::move(cb),
+                            g_hasPipelineThread ? PipelinePriority::Normal : PipelinePriority::Blocking);
+#else
   return find_pipeline_impl(type, config, std::move(cb));
+#endif
 }
 
 template <>
 PipelineRef find_pipeline(ShaderType type, const gx::PipelineConfig& config, NewPipelineCallback&& cb) {
 #if defined(__ANDROID__)
-  // The desktop renderer deliberately skips a draw while a new GX pipeline is
-  // compiling. On a stadium that looks like pieces of the geometry loading in
-  // over several frames. Mobile blocks only on first use instead: a short hitch
-  // is preferable to rendering an incomplete field, and the pipeline is cached
-  // for subsequent uses.
-  return find_pipeline_impl(type, config, std::move(cb), PipelinePriority::Blocking);
+  // Record the rest of the frame while the dedicated compiler works. The
+  // renderer waits at first binding, so no stadium draws are discarded.
+  // Backends without a compiler thread must finish here to avoid deadlock.
+  return find_pipeline_impl(type, config, std::move(cb),
+                            g_hasPipelineThread ? PipelinePriority::Normal : PipelinePriority::Blocking);
 #else
   return find_pipeline_impl(type, config, std::move(cb));
 #endif
@@ -1200,7 +1194,15 @@ void end_pipeline_frame() {
 }
 
 bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline) {
-  std::lock_guard guard{g_pipelineMutex};
+  std::unique_lock guard{g_pipelineMutex};
+#if defined(__ANDROID__)
+  if (g_hasPipelineThread && !g_pipelines.contains(ref) && g_pendingPipelines.contains(ref)) {
+    touch_pending_pipeline(ref, PipelinePriority::Blocking);
+    g_pipelineQueueCv.notify_one();
+    // wait releases the mutex: compilation can finish even with a full render queue.
+    g_pipelineReadyCv.wait(guard, [=] { return g_pipelines.contains(ref) || g_pipelineThreadEnd; });
+  }
+#endif
   const auto it = g_pipelines.find(ref);
   if (it == g_pipelines.end()) {
     return false;

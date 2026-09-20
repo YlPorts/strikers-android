@@ -8,7 +8,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.InputDevice;
-import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -16,7 +15,6 @@ import android.view.ViewParent;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
-import android.widget.FrameLayout;
 
 import dev.encounter.aurora.AuroraSurface;
 import org.libsdl.app.SDLActivity;
@@ -30,7 +28,6 @@ public final class StrikersActivity extends SDLActivity
     private static final long OVERLAY_RECOVERY_LONG_MS = 700L;
 
     private TouchControllerView touchController;
-    private LoadingStatusView loadingStatus;
     private InputManager inputManager;
     private boolean physicalGamepadConnected;
     private boolean autoHideTouchWithGamepad;
@@ -51,7 +48,6 @@ public final class StrikersActivity extends SDLActivity
             int triggerLeft,
             int triggerRight);
 
-    static native int nativeGetLoadingState();
 
     private final Runnable hideSettingsControlRunnable = this::hideSettingsControl;
     private final Runnable overlayRecoveryRunnable = () -> {
@@ -75,7 +71,6 @@ public final class StrikersActivity extends SDLActivity
         applyImmersiveMode();
 
         touchController = new TouchControllerView(this);
-        loadingStatus = new LoadingStatusView(this, StrikersActivity::nativeGetLoadingState);
         touchController.setVisibility(View.VISIBLE);
         ensureTouchOverlayAttached();
         touchController.releaseAll();
@@ -107,7 +102,6 @@ public final class StrikersActivity extends SDLActivity
         if (touchController != null) {
             touchController.reloadPreferences();
         }
-        if (loadingStatus != null) loadingStatus.start();
         updateTouchOverlayVisibility();
         scheduleOverlayRecovery();
     }
@@ -144,7 +138,6 @@ public final class StrikersActivity extends SDLActivity
     @Override
     protected void onPause() {
         resumed = false;
-        if (loadingStatus != null) loadingStatus.stop();
         cancelOverlayCallbacks();
         if (touchController != null) {
             touchController.releaseAll();
@@ -163,7 +156,6 @@ public final class StrikersActivity extends SDLActivity
     @Override
     protected void onDestroy() {
         resumed = false;
-        if (loadingStatus != null) loadingStatus.stop();
         cancelOverlayCallbacks();
         if (inputManager != null) {
             inputManager.unregisterInputDeviceListener(this);
@@ -231,15 +223,6 @@ public final class StrikersActivity extends SDLActivity
         ViewGroup contentRoot = findViewById(android.R.id.content);
         if (contentRoot == null) {
             return;
-        }
-
-        if (loadingStatus != null && loadingStatus.getParent() != contentRoot) {
-            ViewParent oldParent = loadingStatus.getParent();
-            if (oldParent instanceof ViewGroup) ((ViewGroup) oldParent).removeView(loadingStatus);
-            contentRoot.addView(loadingStatus, new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                    Gravity.CENTER));
-            if (resumed) loadingStatus.start();
         }
 
         ViewParent currentParent = touchController.getParent();

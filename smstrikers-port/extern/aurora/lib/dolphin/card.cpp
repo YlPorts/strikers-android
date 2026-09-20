@@ -9,6 +9,7 @@
 #include "../card/DolphinCardPath.hpp"
 #include "../logging.hpp"
 #include "../card/CardGciFolder.hpp"
+#include "../card/AndroidDocuments.hpp"
 #include "../io.hpp"
 
 namespace {
@@ -217,6 +218,10 @@ void CARDInit(const char* game, const char* maker) {
   else
     cardWorkingDir = std::filesystem::current_path();
 
+#if defined(__ANDROID__)
+  if (CARD_USE_GCI_FOLDER && PortAndroidSaveEnabled && PortAndroidSaveEnabled())
+    cardWorkingDir = aurora::card::documents::Root;
+#endif
   bool loadedCard = false;
 
   for (int i = 0; i < 2; ++i) {
@@ -228,7 +233,8 @@ void CARDInit(const char* game, const char* maker) {
     const auto& curPath = cardPaths[i];
 
     std::error_code ec;
-    if (std::filesystem::exists(curPath, ec) && CardChannels[i]->open(curPath)) {
+    if ((aurora::card::documents::handles(aurora::io::fs_path_to_string(curPath)) ||
+         std::filesystem::exists(curPath, ec)) && CardChannels[i]->open(curPath)) {
       loadedCard = true;
       Log.info("Loaded GC Card Image: {}", aurora::io::fs_path_to_string(curPath));
     } else if (ec) {
@@ -238,6 +244,11 @@ void CARDInit(const char* game, const char* maker) {
     }
   }
 
+  // A selected folder that became inaccessible must not be replaced by an empty card.
+  if (!loadedCard && aurora::card::documents::handles(aurora::io::fs_path_to_string(cardPaths[0]))) {
+    Log.error("Selected save folder is not readable");
+    return;
+  }
   // create a SlotA card if no cards were loaded
   if (!loadedCard) {
     CardChannels[0]->open(cardPaths[0]);
@@ -325,6 +336,7 @@ s32 CARDCreate(const s32 chan, const char* fileName, const u32 size, CARDFileInf
   if (res == aurora::card::ECardResult::READY) {
     CopyKabuFileHandleToDolphin(chan, handle, fileInfo);
     card->commit();
+    res = card->getError();
   } else
     Log.error("Failed to create file: {}", fileName);
 
@@ -348,12 +360,13 @@ s32 CARDDelete(const s32 chan, const char* fileName) {
     return CARD_RESULT_NOCARD;
 
   const auto& card = GET_CARD(chan);
-  const auto res = card->deleteFile(fileName);
+  auto res = card->deleteFile(fileName);
 
   if (res != aurora::card::ECardResult::READY) {
     Log.error("Failed to delete file: {}", fileName);
   } else {
     card->commit();
+    res = card->getError();
   }
 
   return static_cast<s32>(res);
@@ -375,11 +388,12 @@ s32 CARDFastDelete(const s32 chan, const s32 fileNo) {
     return CARD_RESULT_NOCARD;
 
   const auto& card = GET_CARD(chan);
-  const auto res = card->deleteFile(fileNo);
+  auto res = card->deleteFile(fileNo);
   if (res != aurora::card::ECardResult::READY) {
     Log.error("Failed to delete file at idx: {}", fileNo);
   } else {
     card->commit();
+    res = card->getError();
   }
 
   return static_cast<s32>(res);
@@ -422,7 +436,7 @@ s32 CARDFormat(s32 chan) {
   const auto& card = GET_CARD(chan);
   card->format(static_cast<aurora::card::ECardSlot>(chan));
   card->commit();
-  return CARD_RESULT_READY;
+  return static_cast<s32>(card->getError());
 }
 
 s32 CARDFormatAsync(const s32 chan, const CARDCallback callback) {
@@ -663,6 +677,7 @@ s32 CARDSetStatus(const s32 chan, s32 fileNo, const CARDStat* stat) {
     Log.error("Failed to set status of file at idx: {}", fileNo);
   } else {
     card->commit();
+    res = card->getError();
   }
 
   return static_cast<s32>(res);
@@ -765,6 +780,7 @@ s32 CARDWrite(const CARDFileInfo* fileInfo, const void* addr, const s32 length, 
     Log.error("Failed to write {} bytes to card", length);
   } else {
     card->commit();
+    res = card->getError();
   }
 
   return static_cast<s32>(res);

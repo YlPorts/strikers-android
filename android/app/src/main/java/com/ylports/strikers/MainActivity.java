@@ -17,10 +17,12 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.lang.ref.WeakReference;
 
 /** Clean launcher for the Android release build. */
 public final class MainActivity extends Activity {
     private static final int PICK_GAME_IMAGE = 1001;
+    static final int PICK_SAVE_FOLDER = 1002;
 
     static final String PREFS = "strikers_android";
     static final String PREF_GAME_URI = "game_image_uri";
@@ -28,6 +30,8 @@ public final class MainActivity extends Activity {
     static final String PREF_RESOLUTION_ROWS = "render_rows";
     static final String PREF_AUTO_HIDE_TOUCH = "auto_hide_touch_with_gamepad";
     static final String PREF_TARGET_FPS = "target_fps";
+    static final String PREF_SAVE_FOLDER = "save_folder_uri";
+    static final String PREF_SAVE_FOLDER_NAME = "save_folder_name";
 
     private static final String[] LANGUAGE_LABELS = {
             "English", "Español", "Français", "Deutsch", "Italiano"
@@ -52,6 +56,11 @@ public final class MainActivity extends Activity {
     private Button playGameButton;
     private CheckBox autoHideTouch;
     private boolean launchPending;
+    private static volatile boolean folderPending;
+    private static WeakReference<MainActivity> resumedLauncher = new WeakReference<>(null);
+    private TextView saveFolderLabel;
+    private Button saveFolderButton;
+    private Button internalSavesButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,8 +77,14 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumedLauncher = new WeakReference<>(this);
         launchPending = false;
         updateLauncherControls();
+    }
+
+    @Override protected void onPause() {
+        if (resumedLauncher.get() == this) resumedLauncher.clear();
+        super.onPause();
     }
 
     private View buildLauncherView() {
@@ -139,6 +154,30 @@ public final class MainActivity extends Activity {
         autoHideTouch.setChecked(prefs.getBoolean(PREF_AUTO_HIDE_TOUCH, false));
         root.addView(autoHideTouch, selectorParams());
 
+        addSectionLabel(root, "Carpeta de partidas");
+        saveFolderLabel = new TextView(this);
+        saveFolderLabel.setTextColor(Color.LTGRAY);
+        root.addView(saveFolderLabel, selectorParams());
+        saveFolderButton = new Button(this);
+        saveFolderButton.setText("Elegir carpeta de partidas");
+        saveFolderButton.setAllCaps(false);
+        saveFolderButton.setOnClickListener(v -> chooseSaveFolder());
+        root.addView(saveFolderButton, buttonParams());
+        internalSavesButton = new Button(this);
+        internalSavesButton.setText("Usar partidas internas");
+        internalSavesButton.setAllCaps(false);
+        internalSavesButton.setOnClickListener(v -> {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .remove(PREF_SAVE_FOLDER).remove(PREF_SAVE_FOLDER_NAME).apply();
+            updateLauncherControls();
+        });
+        root.addView(internalSavesButton, buttonParams());
+        TextView saveHint = new TextView(this);
+        saveHint.setText("Si eliges una carpeta vacía, se copian tus partidas actuales. Si ya contiene partidas, se usarán esas. Las copias anteriores se conservan.");
+        saveHint.setTextColor(Color.LTGRAY);
+        saveHint.setTextSize(13f);
+        root.addView(saveHint, selectorParams());
+
         chooseGameButton = new Button(this);
         chooseGameButton.setAllCaps(false);
         chooseGameButton.setOnClickListener(v -> chooseGameImage());
@@ -194,7 +233,16 @@ public final class MainActivity extends Activity {
             chooseGameButton.setText(hasGame ? "Cambiar ROM" : "Seleccionar ROM");
         }
         if (playGameButton != null) {
-            playGameButton.setEnabled(hasGame && !launchPending);
+            playGameButton.setEnabled(hasGame && !launchPending && !folderPending);
+        }
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        boolean external = prefs.getString(PREF_SAVE_FOLDER, null) != null;
+        if (saveFolderLabel != null) saveFolderLabel.setText(external
+                ? prefs.getString(PREF_SAVE_FOLDER_NAME, "Carpeta seleccionada") : "Almacenamiento de la aplicación");
+        if (saveFolderButton != null) saveFolderButton.setEnabled(!folderPending && !launchPending);
+        if (internalSavesButton != null) {
+            internalSavesButton.setVisibility(external ? View.VISIBLE : View.GONE);
+            internalSavesButton.setEnabled(!folderPending && !launchPending);
         }
     }
 
@@ -218,10 +266,65 @@ public final class MainActivity extends Activity {
         startActivityForResult(intent, PICK_GAME_IMAGE);
     }
 
+    private void chooseSaveFolder() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        try {
+            startActivityForResult(intent, PICK_SAVE_FOLDER);
+        } catch (Exception e) {
+            Toast.makeText(this, "No se pudo abrir el selector de carpetas.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void acceptSaveFolder(Intent data) {
+        Uri folder = data.getData();
+        if (folder == null || folderPending) return;
+        int required = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+        try {
+            if ((data.getFlags() & required) != required) throw new SecurityException("Sin permiso de escritura");
+            getContentResolver().takePersistableUriPermission(folder, required);
+        } catch (Exception e) {
+            Toast.makeText(this, "La carpeta necesita permiso de lectura y escritura.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        folderPending = true;
+        updateLauncherControls();
+        String previous = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_SAVE_FOLDER, null);
+        new Thread(() -> {
+            String error = null;
+            try {
+                SaveFolder destination = new SaveFolder(getApplicationContext(), folder);
+                destination.validate();
+                if (!folder.toString().equals(previous)) destination.copyIfEmpty(getFilesDir(),
+                        previous == null ? null : new SaveFolder(getApplicationContext(), Uri.parse(previous)));
+                destination.prepareDirectories();
+                String name = destination.displayName();
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putString(PREF_SAVE_FOLDER, folder.toString()).putString(PREF_SAVE_FOLDER_NAME, name).commit();
+            } catch (Exception e) {
+                error = "No se pudo usar esa carpeta. Elige una carpeta local con permiso de escritura.";
+                RunLog.append(this, "save folder selection failed: " + e);
+            }
+            final String result = error;
+            runOnUiThread(() -> {
+                folderPending = false;
+                MainActivity current = resumedLauncher.get();
+                if (current == null || current.isFinishing() || current.isDestroyed()) return;
+                current.updateLauncherControls();
+                Toast.makeText(current, result == null ? "Carpeta de partidas guardada." : result, Toast.LENGTH_LONG).show();
+            });
+        }, "strikers-save-folder").start();
+    }
+
     @Override
     @SuppressWarnings("deprecation")
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == PICK_SAVE_FOLDER) {
+            if (resultCode == RESULT_OK && data != null) acceptSaveFolder(data);
+            return;
+        }
         if (requestCode != PICK_GAME_IMAGE || resultCode != RESULT_OK || data == null) {
             return;
         }
@@ -245,7 +348,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean launchGame() {
-        if (launchPending) return false;
+        if (launchPending || folderPending) return false;
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         String saved = prefs.getString(PREF_GAME_URI, null);
         if (saved == null) {
@@ -283,6 +386,7 @@ public final class MainActivity extends Activity {
         game.putExtra(GameBootstrapActivity.EXTRA_LANGUAGE, language);
         game.putExtra(GameBootstrapActivity.EXTRA_RENDER_ROWS, rows);
         game.putExtra(GameBootstrapActivity.EXTRA_TARGET_FPS, targetFps);
+        game.putExtra(GameBootstrapActivity.EXTRA_SAVE_FOLDER, prefs.getString(PREF_SAVE_FOLDER, null));
         game.putExtra(GameBootstrapActivity.EXTRA_AUTO_HIDE_TOUCH, autoHideTouch.isChecked());
         game.setData(Uri.parse(saved));
         game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);

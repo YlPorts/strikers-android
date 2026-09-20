@@ -22,6 +22,7 @@ private:
   std::filesystem::path m_folderPath;
   BlockAllocationTable m_bat;
 
+  ECardResult m_error = ECardResult::READY;
   EEncoding m_encoding = EEncoding::ASCII;
 
   char m_game[5] = {'\0'};

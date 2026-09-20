@@ -64,6 +64,8 @@ jobs:
             -o /tmp/frame-pacing-test
           /tmp/frame-pacing-test
           /tmp/frame-pacing-test 120
+          g++ -std=c++20 -D__ANDROID__ -Wall -Wextra -Werror -fsanitize=undefined android/tests/save_documents_test.cpp -o /tmp/save-documents-test
+          /tmp/save-documents-test
           gradle --no-daemon -p android :app:testReleaseUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
 
       - name: Preserve control test results

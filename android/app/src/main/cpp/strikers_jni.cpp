@@ -12,7 +12,6 @@
 #include <dolphin/pad.h>
 
 #include "port/disc.h"
-#include "port/android_loading.h"
 #include "touch_state.h"
 
 namespace {
@@ -26,7 +25,36 @@ std::string g_filesDir;
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
               "Android touch snapshots must be lock-free on the target ABI");
 std::atomic<std::uint64_t> g_touchState{0};
-std::atomic<unsigned int> g_loadingState{0};
+
+JavaVM* g_saveVm = nullptr;
+jobject g_saveFolder = nullptr;
+jmethodID g_saveOpen = nullptr, g_saveList = nullptr, g_saveMkdir = nullptr, g_saveDelete = nullptr;
+
+struct SaveEnv {
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    SaveEnv() {
+        if (!g_saveVm) return;
+        if (g_saveVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_EDETACHED) {
+            attached = g_saveVm->AttachCurrentThread(&env, nullptr) == JNI_OK;
+            if (!attached) env = nullptr;
+        }
+    }
+    ~SaveEnv() { if (attached) g_saveVm->DetachCurrentThread(); }
+    bool ok() {
+        if (!env) return false;
+        if (!env->ExceptionCheck()) return true;
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Save folder access failed");
+        return false;
+    }
+    jstring path(const char* value) {
+        constexpr const char* prefix = "/strikers-saf/";
+        if (!env || !value || strncmp(value, prefix, strlen(prefix)) != 0) return nullptr;
+        return env->NewStringUTF(value + strlen(prefix));
+    }
+};
 
 std::string JStringToUtf8(JNIEnv* env, jstring value) {
     if (value == nullptr) {
@@ -231,19 +259,60 @@ Java_com_ylports_strikers_StrikersActivity_nativeSetTouchState(
             substick_x, substick_y, trigger_left, trigger_right}), std::memory_order_relaxed);
 }
 
-extern "C" void PortAndroidSetLoadActive(int active) {
-    if (active) g_loadingState.fetch_or(1u, std::memory_order_relaxed);
-    else g_loadingState.fetch_and(~1u, std::memory_order_relaxed);
+// Configured on the bootstrap thread before the native game starts. The global
+// reference lives for the :game process; no Activity or UI thread is retained.
+extern "C" JNIEXPORT void JNICALL
+Java_com_ylports_strikers_GameBootstrapActivity_nativeSetSaveFolder(JNIEnv* env, jclass, jobject folder) {
+    if (g_saveFolder) env->DeleteGlobalRef(g_saveFolder);
+    g_saveFolder = folder ? env->NewGlobalRef(folder) : nullptr;
+    if (!folder) return;
+    env->GetJavaVM(&g_saveVm);
+    jclass cls = env->GetObjectClass(folder);
+    g_saveOpen = env->GetMethodID(cls, "open", "(Ljava/lang/String;I)I");
+    g_saveList = env->GetMethodID(cls, "list", "(Ljava/lang/String;)[Ljava/lang/String;");
+    g_saveMkdir = env->GetMethodID(cls, "mkdir", "(Ljava/lang/String;)Z");
+    g_saveDelete = env->GetMethodID(cls, "delete", "(Ljava/lang/String;)Z");
+    env->DeleteLocalRef(cls);
 }
 
-extern "C" void PortAndroidSetShaderWait(int active) {
-    if (active) g_loadingState.fetch_or(2u, std::memory_order_relaxed);
-    else g_loadingState.fetch_and(~2u, std::memory_order_relaxed);
+extern "C" bool PortAndroidSaveEnabled() { return g_saveFolder != nullptr; }
+
+extern "C" int PortAndroidSaveOpen(const char* path, int mode) {
+    SaveEnv scope;
+    auto name = scope.path(path);
+    if (!name || !g_saveFolder || !g_saveOpen) return -1;
+    const int fd = scope.env->CallIntMethod(g_saveFolder, g_saveOpen, name, mode);
+    scope.env->DeleteLocalRef(name);
+    return scope.ok() ? fd : -1;
 }
 
-extern "C" JNIEXPORT jint JNICALL
-Java_com_ylports_strikers_StrikersActivity_nativeGetLoadingState(JNIEnv*, jclass) {
-    return static_cast<jint>(g_loadingState.load(std::memory_order_relaxed));
+static bool SavePathOperation(const char* path, jmethodID method) {
+    SaveEnv scope;
+    auto name = scope.path(path);
+    if (!name || !g_saveFolder || !method) return false;
+    const bool success = scope.env->CallBooleanMethod(g_saveFolder, method, name);
+    scope.env->DeleteLocalRef(name);
+    return scope.ok() && success;
+}
+extern "C" bool PortAndroidSaveMkdir(const char* path) { return SavePathOperation(path, g_saveMkdir); }
+extern "C" bool PortAndroidSaveDelete(const char* path) { return SavePathOperation(path, g_saveDelete); }
+
+extern "C" bool PortAndroidSaveList(const char* path, void (*append)(const char*, void*), void* data) {
+    SaveEnv scope;
+    auto name = scope.path(path);
+    if (!name || !g_saveFolder || !g_saveList) return false;
+    auto names = static_cast<jobjectArray>(scope.env->CallObjectMethod(g_saveFolder, g_saveList, name));
+    scope.env->DeleteLocalRef(name);
+    if (!scope.ok() || !names) return false;
+    for (jsize i = 0, size = scope.env->GetArrayLength(names); i < size; ++i) {
+        auto item = static_cast<jstring>(scope.env->GetObjectArrayElement(names, i));
+        const std::string text = JStringToUtf8(scope.env, item);
+        scope.env->DeleteLocalRef(item);
+        if (!scope.ok()) { scope.env->DeleteLocalRef(names); return false; }
+        append(text.c_str(), data);
+    }
+    scope.env->DeleteLocalRef(names);
+    return true;
 }
 
 // Do not define JNI_OnLoad here. SDL3's Android backend owns JNI_OnLoad and uses
