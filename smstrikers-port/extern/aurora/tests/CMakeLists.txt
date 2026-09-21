@@ -93,7 +93,7 @@ if (AURORA_ENABLE_GX)
     ../lib/dolphin/gx
   )
 
-  target_compile_definitions(gx_fifo_tests PRIVATE AURORA TARGET_PC)
+  target_compile_definitions(gx_fifo_tests PRIVATE AURORA TARGET_PC AURORA_GX_TESTS)
 
   target_link_libraries(gx_fifo_tests PRIVATE
     gtest
@@ -113,6 +113,7 @@ if (AURORA_ENABLE_GX)
     gx_texture_cache_test.cpp
     gx_texture_cache_test_stubs.cpp
     ../lib/gx/texture.cpp
+    ../lib/thread.cpp
   )
   target_include_directories(gx_texture_cache_tests PRIVATE
     ../include

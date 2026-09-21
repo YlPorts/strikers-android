@@ -1,6 +1,10 @@
 package com.ylports.strikers;
 
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.graphics.Color;
+import android.os.BatteryManager;
 import android.content.res.Configuration;
 import android.hardware.input.InputManager;
 import android.os.Build;
@@ -15,6 +19,10 @@ import android.view.ViewParent;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.view.Gravity;
+import android.widget.FrameLayout;
+import android.widget.TextView;
+import java.util.Locale;
 
 import dev.encounter.aurora.AuroraSurface;
 import org.libsdl.app.SDLActivity;
@@ -33,6 +41,22 @@ public final class StrikersActivity extends SDLActivity
     private boolean autoHideTouchWithGamepad;
     private boolean resumed;
     private Handler uiHandler;
+    private TextView performanceView;
+    private static native float nativePresentedFps();
+    private final Runnable performanceRunnable = new Runnable() {
+        @Override public void run() {
+            if (!resumed || performanceView == null || mBrokenLibraries || isFinishing()) return;
+            float fps = nativePresentedFps();
+            String text = fps > 0 ? String.format(Locale.US, "%.0f FPS · %.1f ms", fps, 1000f / fps) : "0 FPS";
+            Intent battery = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (battery != null && battery.hasExtra(BatteryManager.EXTRA_TEMPERATURE)) {
+                text += String.format(Locale.US, " · Batería %.1f °C",
+                        battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10f);
+            }
+            performanceView.setText(text);
+            uiHandler.postDelayed(this, 1000);
+        }
+    };
 
     public int getTargetFrameRate() {
         return getIntent().getIntExtra(GameBootstrapActivity.EXTRA_TARGET_FPS, 60) == 120
@@ -66,6 +90,16 @@ public final class StrikersActivity extends SDLActivity
         if (mBrokenLibraries) return;
 
         uiHandler = new Handler(Looper.getMainLooper());
+        if (getIntent().getBooleanExtra(GraphicsSettings.STATS, false)) {
+            performanceView = new TextView(this);
+            performanceView.setTextColor(Color.WHITE);
+            performanceView.setTextSize(12);
+            performanceView.setBackgroundColor(0x99000000);
+            performanceView.setPadding(12, 4, 12, 4);
+            performanceView.setClickable(false);
+            performanceView.setFocusable(false);
+            performanceView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        }
         autoHideTouchWithGamepad = getIntent().getBooleanExtra(
                 GameBootstrapActivity.EXTRA_AUTO_HIDE_TOUCH, false);
         applyImmersiveMode();
@@ -97,6 +131,10 @@ public final class StrikersActivity extends SDLActivity
         super.onResume();
         if (mBrokenLibraries) return;
         resumed = true;
+        if (uiHandler != null && performanceView != null) {
+            uiHandler.removeCallbacks(performanceRunnable);
+            uiHandler.post(performanceRunnable);
+        }
         applyImmersiveMode();
         ensureTouchOverlayAttached();
         if (touchController != null) {
@@ -196,6 +234,7 @@ public final class StrikersActivity extends SDLActivity
         if (uiHandler != null) {
             uiHandler.removeCallbacks(hideSettingsControlRunnable);
             uiHandler.removeCallbacks(overlayRecoveryRunnable);
+            uiHandler.removeCallbacks(performanceRunnable);
         }
     }
 
@@ -244,6 +283,20 @@ public final class StrikersActivity extends SDLActivity
         }
         WindowInsets insets = contentRoot.getRootWindowInsets();
         if (insets != null) touchController.applySafeInsets(insets);
+        if (performanceView != null && contentRoot instanceof FrameLayout) {
+            if (performanceView.getParent() != contentRoot) {
+                if (performanceView.getParent() instanceof ViewGroup) {
+                    ((ViewGroup) performanceView.getParent()).removeView(performanceView);
+                }
+                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+                params.bottomMargin = (int) (12 * getResources().getDisplayMetrics().density);
+                contentRoot.addView(performanceView, params);
+                performanceView.setTranslationZ(2f);
+            }
+            performanceView.bringToFront();
+        }
     }
 
     /**

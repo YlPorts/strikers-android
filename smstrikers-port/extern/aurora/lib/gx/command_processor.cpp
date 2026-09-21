@@ -68,61 +68,69 @@ private:
   size_t mPos = 0;
 };
 
-u16 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxCount) noexcept {
-  u16 numIndices = 0;
+u32 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxCount) noexcept {
+  u32 numIndices = 0;
+  // smstrikers-port: filled in place, since ByteBuffer::append costs a resize check and a memcpy per index.
   if (prim == GX_QUADS) {
-    buf.reserve_extra((vtxCount / 4) * 6 * sizeof(u16));
-
-    for (u16 v = 0; v < vtxCount; v += 4) {
-      u16 idx0 = vtxStart + v;
-      u16 idx1 = vtxStart + v + 1;
-      u16 idx2 = vtxStart + v + 2;
-      u16 idx3 = vtxStart + v + 3;
-
-      buf.append(idx0);
-      buf.append(idx1);
-      buf.append(idx2);
-      numIndices += 3;
-
-      buf.append(idx2);
-      buf.append(idx3);
-      buf.append(idx0);
-      numIndices += 3;
+    const u32 quads = vtxCount / 4;
+    numIndices = quads * 6;
+    u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
+    for (u32 q = 0; q < quads; ++q) {
+      const u16 idx0 = static_cast<u16>(vtxStart + q * 4);
+      out[0] = idx0;
+      out[1] = static_cast<u16>(idx0 + 1);
+      out[2] = static_cast<u16>(idx0 + 2);
+      out[3] = static_cast<u16>(idx0 + 2);
+      out[4] = static_cast<u16>(idx0 + 3);
+      out[5] = idx0;
+      out += 6;
     }
   } else if (prim == GX_TRIANGLES) {
-    buf.reserve_extra(vtxCount * sizeof(u16));
+    numIndices = vtxCount;
+    u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
     for (u16 v = 0; v < vtxCount; ++v) {
-      const u16 idx = vtxStart + v;
-      buf.append(idx);
-      ++numIndices;
+      out[v] = static_cast<u16>(vtxStart + v);
     }
   } else if (prim == GX_TRIANGLEFAN) {
-    buf.reserve_extra(((u32(vtxCount) - 3) * 3 + 3) * sizeof(u16));
-    for (u16 v = 0; v < vtxCount; ++v) {
-      const u16 idx = vtxStart + v;
-      if (v < 3) {
-        buf.append(idx);
-        ++numIndices;
-        continue;
+    if (vtxCount < 3) {
+      numIndices = vtxCount;
+      u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
+      for (u16 v = 0; v < vtxCount; ++v) {
+        out[v] = static_cast<u16>(vtxStart + v);
       }
-      buf.append(std::array{vtxStart, static_cast<u16>(idx - 1), idx});
-      numIndices += 3;
+    } else {
+      numIndices = (u32(vtxCount) - 2) * 3;
+      u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
+      for (u16 v = 2; v < vtxCount; ++v) {
+        const u16 idx = static_cast<u16>(vtxStart + v);
+        out[0] = vtxStart;
+        out[1] = static_cast<u16>(idx - 1);
+        out[2] = idx;
+        out += 3;
+      }
     }
   } else if (prim == GX_TRIANGLESTRIP) {
-    buf.reserve_extra(((static_cast<u32>(vtxCount) - 3) * 3 + 3) * sizeof(u16));
-    for (u16 v = 0; v < vtxCount; ++v) {
-      const u16 idx = vtxStart + v;
-      if (v < 3) {
-        buf.append(idx);
-        ++numIndices;
-        continue;
+    if (vtxCount < 3) {
+      numIndices = vtxCount;
+      u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
+      for (u16 v = 0; v < vtxCount; ++v) {
+        out[v] = static_cast<u16>(vtxStart + v);
       }
-      if ((v & 1) == 0) {
-        buf.append(std::array{static_cast<u16>(idx - 2), static_cast<u16>(idx - 1), idx});
-      } else {
-        buf.append(std::array{static_cast<u16>(idx - 1), static_cast<u16>(idx - 2), idx});
+    } else {
+      numIndices = (u32(vtxCount) - 2) * 3;
+      u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
+      for (u16 v = 2; v < vtxCount; ++v) {
+        const u16 idx = static_cast<u16>(vtxStart + v);
+        if ((v & 1) == 0) {
+          out[0] = static_cast<u16>(idx - 2);
+          out[1] = static_cast<u16>(idx - 1);
+        } else {
+          out[0] = static_cast<u16>(idx - 1);
+          out[1] = static_cast<u16>(idx - 2);
+        }
+        out[2] = idx;
+        out += 3;
       }
-      numIndices += 3;
     }
   } else if (prim == GX_LINES || prim == GX_LINESTRIP || prim == GX_POINTS) {
     buf.reserve_extra(6 * sizeof(u16));
@@ -1066,4 +1074,9 @@ void clear_draw_cache() noexcept {
   sDrawCache.hasFogRange = false;
 }
 
+#ifdef AURORA_GX_TESTS
+u32 prepare_indices_for_testing(ByteBuffer& buffer, GXPrimitive primitive, u16 count) noexcept {
+  return prepare_idx_buffer(buffer, primitive, 0, count);
+}
+#endif
 } // namespace aurora::gx::fifo

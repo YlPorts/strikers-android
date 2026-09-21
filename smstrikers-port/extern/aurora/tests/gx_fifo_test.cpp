@@ -16,6 +16,27 @@
 
 using aurora::gx::g_gxState;
 
+namespace aurora::gx::fifo {
+u32 prepare_indices_for_testing(ByteBuffer&, GXPrimitive, u16) noexcept;
+}
+
+TEST(GxPrimitiveIndices, LargeStripKeepsFullIndexCount) {
+  aurora::ByteBuffer indices;
+  const auto count = aurora::gx::fifo::prepare_indices_for_testing(indices, GX_TRIANGLESTRIP, 65535);
+  EXPECT_EQ(count, 196599u);
+  EXPECT_EQ(indices.size(), size_t(count) * sizeof(u16));
+  const auto* values = reinterpret_cast<const u16*>(indices.data());
+  EXPECT_EQ(values[count - 1], 65534u);
+}
+
+TEST(GxPrimitiveIndices, ShortPrimitivesDoNotUnderflowAllocation) {
+  for (const auto primitive : {GX_TRIANGLEFAN, GX_TRIANGLESTRIP}) {
+    aurora::ByteBuffer indices;
+    EXPECT_EQ(aurora::gx::fifo::prepare_indices_for_testing(indices, primitive, 2), 2u);
+    EXPECT_EQ(indices.size(), 2 * sizeof(u16));
+  }
+}
+
 namespace aurora::gfx {
 extern uint32_t g_testDrawCount;
 extern std::atomic<uint32_t> g_testProcessedDrawCount;

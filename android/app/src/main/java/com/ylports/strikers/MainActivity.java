@@ -174,6 +174,17 @@ public final class MainActivity extends Activity {
         autoHideTouch.setChecked(prefs.getBoolean(PREF_AUTO_HIDE_TOUCH, false));
         settings.addView(autoHideTouch, selectorParams());
 
+        Button graphicsButton = new Button(this);
+        graphicsButton.setText("Gráficos");
+        graphicsButton.setAllCaps(false);
+        graphicsButton.setOnClickListener(v -> GraphicsSettings.show(this));
+        settings.addView(graphicsButton, buttonParams());
+        Button driversButton = new Button(this);
+        driversButton.setText("Drivers gráficos");
+        driversButton.setAllCaps(false);
+        driversButton.setOnClickListener(v -> startActivity(new Intent(this, DriversActivity.class)));
+        settings.addView(driversButton, buttonParams());
+
         addSectionLabel(settings, "Carpeta de partidas");
         saveFolderLabel = new TextView(this);
         saveFolderLabel.setTextColor(Color.LTGRAY);
@@ -387,6 +398,8 @@ public final class MainActivity extends Activity {
         game.putExtra(GameBootstrapActivity.EXTRA_TARGET_FPS, targetFps);
         game.putExtra(GameBootstrapActivity.EXTRA_SAVE_FOLDER, prefs.getString(PREF_SAVE_FOLDER, null));
         game.putExtra(GameBootstrapActivity.EXTRA_AUTO_HIDE_TOUCH, autoHideTouch.isChecked());
+        GraphicsSettings.putLaunchExtras(game, prefs);
+        game.putExtra(DriverRuntime.EXTRA_DRIVER, prefs.getString(DriverStore.PREF_DRIVER, ""));
         game.setData(Uri.parse(saved));
         game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {

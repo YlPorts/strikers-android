@@ -10,13 +10,15 @@
     <application
         android:name=".DiagnosticApplication"
         android:allowBackup="false"
-        android:extractNativeLibs="false"
+        android:extractNativeLibs="true"
         android:hardwareAccelerated="true"
         android:hasFragileUserData="true"
         android:icon="@drawable/ic_launcher"
         android:roundIcon="@drawable/ic_launcher"
         android:label="Strikers Android"
         android:theme="@android:style/Theme.Material.NoActionBar">
+
+        <activity android:name=".DriversActivity" android:exported="false" />
 
         <activity
             android:name=".MainActivity"

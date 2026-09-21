@@ -121,22 +121,25 @@ public final class GameBootstrapActivity extends Activity {
             Os.setenv("STRIKERS_RES_SCALE",
                     String.format(Locale.US, "%.6f", renderScale), true);
 
-            // Keep the mobile defaults lightweight. These are already the PC defaults,
-            // but exporting them here prevents a stray packaged config from turning on
-            // expensive 4x MSAA on a phone.
-            Os.setenv("STRIKERS_MSAA", "1", true);
+            String graphics = GraphicsSettings.applyEnvironment(getIntent(), prefs);
+            DriverRuntime.prepare(this, getIntent().getStringExtra(DriverRuntime.EXTRA_DRIVER));
+            android.app.ActivityManager manager = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            android.app.ActivityManager.MemoryInfo memory = new android.app.ActivityManager.MemoryInfo();
+            if (manager != null) manager.getMemoryInfo(memory);
+            boolean preconvert = manager != null && !manager.isLowRamDevice() && memory.totalMem >= 3L * 1024 * 1024 * 1024;
+            Os.setenv("AURORA_TEX_PRECONVERT", preconvert ? "1" : "0", true);
+            RunLog.append(this, "graphics: bounded texture preparation=" + preconvert);
             // A fast panel does not automatically double rendering workload.
             // Keep 120 available by choice; the simulation retains its own clock.
             int requestedFps = getIntent().getIntExtra(EXTRA_TARGET_FPS,
                     prefs.getInt(MainActivity.PREF_TARGET_FPS, 60));
             int targetFps = requestedFps == 120 ? 120 : 60;
             Os.setenv("STRIKERS_FPS_LIMIT", Integer.toString(targetFps), true);
-            Os.setenv("STRIKERS_VSYNC", "1", true);
 
             RunLog.append(this, "bootstrap: settings language=" + language
                     + " render=" + renderRows + "p (" + resolutionMode + ", scale="
-                    + String.format(Locale.US, "%.3f", renderScale) + "x) msaa=1 fps_limit="
-                    + targetFps + " vsync=1");
+                    + String.format(Locale.US, "%.3f", renderScale) + "x) fps_limit="
+                    + targetFps + " " + graphics);
             RunLog.append(this, "bootstrap: native environment and early crash log exported before library load");
 
             try {
@@ -207,6 +210,7 @@ public final class GameBootstrapActivity extends Activity {
             nativeGame.putExtra(EXTRA_AUTO_HIDE_TOUCH,
                     getIntent().getBooleanExtra(EXTRA_AUTO_HIDE_TOUCH, false));
             nativeGame.putExtra(EXTRA_TARGET_FPS, targetFps);
+            nativeGame.putExtra(GraphicsSettings.STATS, getIntent().getBooleanExtra(GraphicsSettings.STATS, false));
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) {
                     return;

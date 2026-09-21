@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <dolphin/pad.h>
+#include <aurora/gfx.h>
 
 #include "port/disc.h"
 #include "touch_state.h"
@@ -112,6 +113,12 @@ u8 ClampTrigger(jint value) {
     return static_cast<u8>(v);
 }
 }  // namespace
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_ylports_strikers_StrikersActivity_nativePresentedFps(JNIEnv*, jclass) {
+    // This API snapshots the presentation timestamps under the renderer's stats mutex.
+    return aurora_get_fps();
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_ylports_strikers_MainActivity_nativeBootstrapInit(

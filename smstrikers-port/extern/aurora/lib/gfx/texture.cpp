@@ -1,3 +1,6 @@
+#include <cstring>
+#include <cstdlib>
+#include <chrono>
 #include "resources.hpp"
 #include "recording.hpp"
 
@@ -97,28 +100,25 @@ u16 wgpu_aniso(GXAnisotropy aniso) {
 }
 } // namespace
 
-TextureHandle new_static_texture_2d(uint32_t width, uint32_t height, uint32_t mips, u32 format, ArrayRef<uint8_t> data,
-                                    bool tlut, const char* label) noexcept {
-  ZoneScoped;
+TexLoadTiming g_texLoadTiming;
 
-  auto handle = new_dynamic_texture_2d(width, height, mips, format, label);
-  auto& ref = *handle;
+bool tex_log_enabled() noexcept {
+  static const bool s_enabled = [] {
+    const char* e = std::getenv("AURORA_TEX_LOG");
+    return e != nullptr && *e != '\0' && std::strcmp(e, "0") != 0;
+  }();
+  return s_enabled;
+}
 
-  ConvertedTexture converted;
-  if (ref.gxFormat != InvalidTextureFormat) {
-    if (tlut) {
-      CHECK(ref.size.height == 1, "new_static_texture_2d[{}]: expected tlut height 1, got {}", label, ref.size.height);
-      CHECK(ref.mipCount == 1, "new_static_texture_2d[{}]: expected tlut mipCount 1, got {}", label, ref.mipCount);
-      converted = convert_tlut(ref.gxFormat, ref.size.width, data);
-    } else {
-      converted = convert_texture(ref.gxFormat, ref.size.width, ref.size.height, ref.mipCount, data);
-    }
-    if (!converted.data.empty()) {
-      data = converted.data;
-      ref.hasArbitraryMips = converted.hasArbitraryMips;
-    }
-  }
+uint64_t tex_log_now_ns() noexcept {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 
+// smstrikers-port: the upload half of new_static_texture_2d, shared with new_static_texture_2d_converted.
+static void queue_static_texture_upload(TextureRef& ref, uint32_t mips, ArrayRef<uint8_t> data, const char* label,
+                                        bool timing, uint64_t t0) noexcept {
   uint32_t offset = 0;
   for (uint32_t mip = 0; mip < mips; ++mip) {
     const wgpu::Extent3D mipSize{
@@ -152,6 +152,67 @@ TextureHandle new_static_texture_2d(uint32_t width, uint32_t height, uint32_t mi
   if (data.size() != UINT32_MAX && offset < data.size()) {
     Log.warn("new_static_texture_2d[{}]: texture used {} bytes, but given {} bytes", label, offset, data.size());
   }
+  if (timing) {
+    g_texLoadTiming.queueNs += tex_log_now_ns() - t0;
+    ++g_texLoadTiming.textures;
+    g_texLoadTiming.bytes += offset;
+  }
+}
+
+TextureHandle new_static_texture_2d(uint32_t width, uint32_t height, uint32_t mips, u32 format, ArrayRef<uint8_t> data,
+                                    bool tlut, const char* label) noexcept {
+  ZoneScoped;
+
+  const bool timing = tex_log_enabled();
+  uint64_t t0 = timing ? tex_log_now_ns() : 0;
+  auto handle = new_dynamic_texture_2d(width, height, mips, format, label);
+  auto& ref = *handle;
+  if (timing) {
+    const uint64_t t = tex_log_now_ns();
+    g_texLoadTiming.createNs += t - t0;
+    t0 = t;
+  }
+
+  ConvertedTexture converted;
+  if (ref.gxFormat != InvalidTextureFormat) {
+    if (tlut) {
+      CHECK(ref.size.height == 1, "new_static_texture_2d[{}]: expected tlut height 1, got {}", label, ref.size.height);
+      CHECK(ref.mipCount == 1, "new_static_texture_2d[{}]: expected tlut mipCount 1, got {}", label, ref.mipCount);
+      converted = convert_tlut(ref.gxFormat, ref.size.width, data);
+    } else {
+      converted = convert_texture(ref.gxFormat, ref.size.width, ref.size.height, ref.mipCount, data);
+    }
+    if (!converted.data.empty()) {
+      data = converted.data;
+      ref.hasArbitraryMips = converted.hasArbitraryMips;
+    }
+  }
+  if (timing) {
+    const uint64_t t = tex_log_now_ns();
+    g_texLoadTiming.convertNs += t - t0;
+    t0 = t;
+  }
+
+  queue_static_texture_upload(ref, mips, data, label, timing, t0);
+  return handle;
+}
+
+TextureHandle new_static_texture_2d_converted(uint32_t width, uint32_t height, uint32_t mips, u32 format,
+                                              ArrayRef<uint8_t> converted, bool hasArbitraryMips,
+                                              const char* label) noexcept {
+  ZoneScoped;
+  const bool timing = tex_log_enabled();
+  uint64_t t0 = timing ? tex_log_now_ns() : 0;
+  auto handle = new_dynamic_texture_2d(width, height, mips, format, label);
+  auto& ref = *handle;
+  ref.hasArbitraryMips = hasArbitraryMips;
+  if (timing) {
+    const uint64_t t = tex_log_now_ns();
+    g_texLoadTiming.createNs += t - t0;
+    t0 = t;
+    ++g_texLoadTiming.preconverted;
+  }
+  queue_static_texture_upload(ref, mips, converted, label, timing, t0);
   return handle;
 }
 

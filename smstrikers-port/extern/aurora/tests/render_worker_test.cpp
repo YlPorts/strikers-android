@@ -20,6 +20,21 @@ protected:
   void TearDown() override { aurora::gfx::render_worker::shutdown(); }
 };
 
+TEST(RenderWorkerFrameSlots, TimedWaitDoesNotConsumeBusySlotAndWakesOnRelease) {
+  FrameSlotPool slots{1};
+  const size_t busy = slots.acquire();
+  EXPECT_FALSE(slots.acquire_for(1ms).has_value());
+  auto waiter = std::async(std::launch::async, [&] { return slots.acquire_for(2s); });
+  slots.release(busy);
+  ASSERT_EQ(waiter.wait_for(1s), std::future_status::ready);
+  const auto ready = waiter.get();
+  ASSERT_TRUE(ready.has_value());
+  EXPECT_EQ(*ready, busy);
+  EXPECT_EQ(slots.free_count(), 0);
+  slots.release(*ready);
+  EXPECT_TRUE(slots.acquire_for(0ms).has_value());
+}
+
 TEST(RenderWorkerQueue, PreservesOrdering) {
   BoundedQueue queue{4};
   ASSERT_TRUE(queue.push(QueueItem{.type = ItemType::BeginFrame, .frameId = 1}));

@@ -19,6 +19,26 @@ env:
   CMAKE_VERSION: '3.31.1'
 
 jobs:
+  render-regressions:
+    name: texture and renderer regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure CPU renderer tests
+        run: >-
+          cmake -S smstrikers-port/extern/aurora -B /tmp/strikers-render-tests
+          -DCMAKE_BUILD_TYPE=Debug -DAURORA_ENABLE_DVD=OFF -DAURORA_ENABLE_CARD=OFF
+          -DAURORA_DAWN_PROVIDER=package -DAURORA_SDL3_PROVIDER=vendor
+          -DSDL_UNIX_CONSOLE_BUILD=ON -DSDL_X11=OFF -DSDL_WAYLAND=OFF
+      - name: Build affected test targets
+        run: cmake --build /tmp/strikers-render-tests --target gx_texture_cache_tests render_worker_tests gx_fifo_tests --parallel 2
+      - name: Run texture ownership, bounded memory, waits and primitive regressions
+        run: |
+          /tmp/strikers-render-tests/tests/gx_texture_cache_tests
+          /tmp/strikers-render-tests/tests/render_worker_tests
+          /tmp/strikers-render-tests/tests/gx_fifo_tests
+
   app-shell:
     name: full native APK
     runs-on: ubuntu-24.04

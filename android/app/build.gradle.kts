@@ -44,8 +44,8 @@ android {
         applicationId = "com.ylports.strikers"
         minSdk = 26
         targetSdk = 36
-        versionCode = 155
-        versionName = "1.5.5"
+        versionCode = 156
+        versionName = "1.5.6"
 
         ndk { abiFilters += listOf("arm64-v8a") }
 
@@ -53,7 +53,8 @@ android {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_shared")
                 cppFlags += listOf("-std=c++17")
-                targets += listOf("SDL3-shared", "strikers_diag", "strikers_android")
+                targets += listOf("SDL3-shared", "strikers_diag", "strikers_android",
+                    "strikers_vulkan", "main_hook", "hook_impl", "file_redirect_hook", "gsl_alloc_hook")
             }
         }
     }
@@ -93,7 +94,8 @@ android {
     }
 
     sourceSets { getByName("main") { java.srcDir(sdlJavaDir.get().asFile) } }
-    packaging { jniLibs { useLegacyPackaging = false } }
+    // libadrenotools requires real, read-only hook files in nativeLibraryDir.
+    packaging { jniLibs { useLegacyPackaging = true } }
 }
 
 tasks.named("preBuild") { dependsOn(prepareSdlJava) }

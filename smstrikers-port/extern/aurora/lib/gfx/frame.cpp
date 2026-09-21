@@ -19,6 +19,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -587,28 +589,26 @@ bool wait_for_staging_buffer(size_t slot) {
 size_t acquire_frame_slot() {
   ZoneScopedN("Acquire frame slot");
   const auto waitStart = PresentClock::now();
-  while (true) {
-    if (const auto slot = g_frameSlots.try_acquire()) {
-      const auto waitDuration = PresentClock::now() - waitStart;
-      const double waitMs = std::chrono::duration<double, std::milli>{waitDuration}.count();
-      TracyPlot("aurora: frameSlotWaitMs", waitMs);
-      return *slot;
-    }
-    wait_for_gpu_progress(std::chrono::microseconds{100});
-  }
+  // Frame slots are released by the render worker itself; this wait needs no GPU polling.
+  const size_t slot = g_frameSlots.acquire();
+  const auto waitDuration = PresentClock::now() - waitStart;
+  const double waitMs = std::chrono::duration<double, std::milli>{waitDuration}.count();
+  TracyPlot("aurora: frameSlotWaitMs", waitMs);
+  return slot;
 }
 
 std::optional<size_t> acquire_mapped_staging_buffer() {
   ZoneScopedN("Acquire mapped staging buffer");
   while (true) {
-    if (auto slot = g_stagingSlots.try_acquire()) {
+    if (auto slot = g_stagingSlots.acquire_for(std::chrono::milliseconds{1})) {
       if (wait_for_staging_buffer(*slot)) {
         return *slot;
       }
       g_stagingSlots.release(*slot);
       return std::nullopt;
     }
-    wait_for_gpu_progress(std::chrono::microseconds{100});
+    // Mapping can need event progress even when the render queue is empty.
+    if (render_worker::is_idle()) enqueue_process_events();
   }
 }
 
@@ -705,6 +705,15 @@ void gpu_synchronize() { render_worker::synchronize(); }
 void synchronize() { render_worker::synchronize(); }
 
 void after_present() noexcept {
+#ifdef __ANDROID__
+  static bool startupReported = false;
+  if (!startupReported) {
+    startupReported = true;
+    if (!std::getenv("STRIKERS_CUSTOM_DRIVER_FAILED")) {
+      if (const char* pending = std::getenv("STRIKERS_DRIVER_PENDING")) std::remove(pending);
+    }
+  }
+#endif
   const auto now = PresentClock::now();
   const int64_t nowNs = timestamp_ns(now);
   const int64_t previousPresentNs = g_lastPresentNs.exchange(nowNs, std::memory_order_acq_rel);

@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <span>
 #include <string>
 #include <string_view>
@@ -651,6 +652,10 @@ const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& en
   const auto& source = present_source();
   const uint32_t width = viewport_extent(viewport.width);
   const uint32_t height = viewport_extent(viewport.height);
+  // An identity resize needs no extra texture, render pass, or uniform upload.
+  if (source.size.width == width && source.size.height == height) {
+    return source;
+  }
   if (!g_resampledFrameBuffer.view || g_resampledFrameBuffer.size.width != width ||
       g_resampledFrameBuffer.size.height != height || g_resampledFrameBuffer.format != source.format) {
     g_resampledFrameBuffer = create_render_texture(width, height, false);
@@ -765,6 +770,14 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
     };
 #ifdef WEBGPU_DAWN
     dawn::native::DawnInstanceDescriptor dawnInstanceDescriptor;
+#ifdef __ANDROID__
+    // Leave Dawn's standard search path completely untouched in system-driver mode.
+    const char* driverPath = std::getenv("STRIKERS_VULKAN_PATH");
+    if (driverPath && *driverPath) {
+      dawnInstanceDescriptor.additionalRuntimeSearchPathsCount = 1;
+      dawnInstanceDescriptor.additionalRuntimeSearchPaths = &driverPath;
+    }
+#endif
     dawnInstanceDescriptor.backendValidationLevel = dawn::native::BackendValidationLevel::Disabled;
     dawnInstanceDescriptor.SetLoggingCallback(wgpu_log);
 #ifdef TRACY_ENABLE

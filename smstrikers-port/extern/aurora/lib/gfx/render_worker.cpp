@@ -167,6 +167,22 @@ std::optional<size_t> FrameSlotPool::try_acquire() {
   return std::nullopt;
 }
 
+std::optional<size_t> FrameSlotPool::acquire_for(std::chrono::nanoseconds timeout) {
+  std::unique_lock lock{m_mutex};
+  if (!m_cv.wait_for(lock, timeout, [&] {
+        return std::any_of(m_freeSlots.begin(), m_freeSlots.end(), [](bool free) { return free; });
+      })) {
+    return std::nullopt;
+  }
+  for (size_t i = 0; i < m_freeSlots.size(); ++i) {
+    if (m_freeSlots[i]) {
+      m_freeSlots[i] = false;
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
 void FrameSlotPool::release(size_t slot) {
   {
     std::lock_guard lock{m_mutex};
