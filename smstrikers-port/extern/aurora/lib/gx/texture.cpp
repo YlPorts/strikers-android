@@ -287,6 +287,8 @@ constexpr uint64_t ReadyBudgetBytes = 16ull * 1024ull * 1024ull;  // converted r
 constexpr uint64_t QueueBudgetBytes = 4ull * 1024ull * 1024ull;   // source copies queued or being converted
 constexpr auto ReadyLifetime = std::chrono::seconds{30};          // results not drawn by then are dropped
 constexpr size_t KeySetLimit = 16384;                              // bounds seenContent and queuedObjects
+constexpr size_t QueueEntryLimit = 256;
+constexpr size_t ReadyEntryLimit = 1024; // bound map/list overhead for tiny textures as well
 constexpr uint64_t MaintenanceFrames = 300;
 
 using Clock = std::chrono::steady_clock;
@@ -434,7 +436,8 @@ void worker(std::stop_token) {
       continue;
     }
     // Evict before insertion so ready results remain within the mobile budget.
-    while (st.parkedBytes + converted.data.size() > ReadyBudgetBytes && !st.parkedLru.empty()) {
+    while ((st.parkedBytes + converted.data.size() > ReadyBudgetBytes || st.parked.size() >= ReadyEntryLimit)
+           && !st.parkedLru.empty()) {
       erase_parked_locked(st, st.parked.find(st.parkedLru.back()));
     }
     st.parkedLru.push_front(key);
@@ -488,7 +491,7 @@ void enqueue(const GXTexObj_& obj) noexcept {
   auto& st = state();
   {
     std::lock_guard lock{st.mutex};
-    if (st.queueBytes + bytes > QueueBudgetBytes) {
+    if (st.queueBytes + bytes > QueueBudgetBytes || st.queue.size() >= QueueEntryLimit) {
       return;
     }
     if (st.queuedObjects.size() >= KeySetLimit) {

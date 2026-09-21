@@ -312,6 +312,14 @@ public:
   void clear() { m_length = 0; }
   void reserve_extra(size_t size) { resize(m_length + size, true); }
 
+  // Grow once, then fill directly (texture source copies and primitive indices).
+  [[nodiscard]] uint8_t* append_uninitialized(size_t size) {
+    resize(m_length + size, false);
+    uint8_t* out = m_data ? m_data + m_length : nullptr;
+    m_length += size;
+    return out;
+  }
+
   ByteBuffer clone() const {
     ByteBuffer clone{m_length};
     std::memcpy(clone.data(), m_data, m_length);
