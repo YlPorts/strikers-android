@@ -29,6 +29,7 @@ std::atomic<std::uint64_t> g_touchState{0};
 JavaVM* g_saveVm = nullptr;
 jobject g_saveFolder = nullptr;
 jmethodID g_saveOpen = nullptr, g_saveList = nullptr, g_saveMkdir = nullptr, g_saveDelete = nullptr;
+jmethodID g_saveIsDirectory = nullptr;
 
 struct SaveEnv {
     JNIEnv* env = nullptr;
@@ -271,6 +272,7 @@ Java_com_ylports_strikers_GameBootstrapActivity_nativeSetSaveFolder(JNIEnv* env,
     g_saveOpen = env->GetMethodID(cls, "open", "(Ljava/lang/String;I)I");
     g_saveList = env->GetMethodID(cls, "list", "(Ljava/lang/String;)[Ljava/lang/String;");
     g_saveMkdir = env->GetMethodID(cls, "mkdir", "(Ljava/lang/String;)Z");
+    g_saveIsDirectory = env->GetMethodID(cls, "isDirectory", "(Ljava/lang/String;)Z");
     g_saveDelete = env->GetMethodID(cls, "delete", "(Ljava/lang/String;)Z");
     env->DeleteLocalRef(cls);
 }
@@ -295,6 +297,7 @@ static bool SavePathOperation(const char* path, jmethodID method) {
     return scope.ok() && success;
 }
 extern "C" bool PortAndroidSaveMkdir(const char* path) { return SavePathOperation(path, g_saveMkdir); }
+extern "C" bool PortAndroidSaveIsDirectory(const char* path) { return SavePathOperation(path, g_saveIsDirectory); }
 extern "C" bool PortAndroidSaveDelete(const char* path) { return SavePathOperation(path, g_saveDelete); }
 
 extern "C" bool PortAndroidSaveList(const char* path, void (*append)(const char*, void*), void* data) {

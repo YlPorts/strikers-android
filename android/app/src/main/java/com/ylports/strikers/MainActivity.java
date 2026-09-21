@@ -41,11 +41,7 @@ public final class MainActivity extends Activity {
     };
 
     private static final String[] RESOLUTION_LABELS = {
-            "448p · rendimiento",
-            "720p · equilibrado",
-            "900p · calidad",
-            "1080p · calidad",
-            "Auto · pantalla"
+            "448p", "720p", "900p", "1080p", "Automática"
     };
     private static final int[] RESOLUTION_ROWS = {448, 720, 900, 1080, 0};
 
@@ -110,14 +106,6 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        addSectionLabel(root, "Idioma");
-        languageSpinner = new Spinner(this);
-        ArrayAdapter<String> languageAdapter = new ArrayAdapter<>(
-                this, android.R.layout.simple_spinner_item, LANGUAGE_LABELS);
-        languageAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        languageSpinner.setAdapter(languageAdapter);
-        root.addView(languageSpinner, selectorParams());
-
         addSectionLabel(root, "Resolución interna");
         resolutionSpinner = new Spinner(this);
         ArrayAdapter<String> resolutionAdapter = new ArrayAdapter<>(
@@ -127,56 +115,18 @@ public final class MainActivity extends Activity {
         root.addView(resolutionSpinner, selectorParams());
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        languageSpinner.setSelection(languageIndex(
-                prefs.getString(PREF_LANGUAGE, "english")));
         resolutionSpinner.setSelection(resolutionIndex(
                 prefs.getInt(PREF_RESOLUTION_ROWS, 720)));
 
-        TextView performanceHint = new TextView(this);
-        performanceHint.setText("Si se calienta o hay tirones, prueba 448p y 60 FPS para reducir la carga.");
-        performanceHint.setTextColor(Color.LTGRAY);
-        performanceHint.setTextSize(13f);
-        root.addView(performanceHint, selectorParams());
-
-        addSectionLabel(root, "Límite de fotogramas");
+        addSectionLabel(root, "Fotogramas");
         frameRateSpinner = new Spinner(this);
         ArrayAdapter<String> frameRateAdapter = new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_item,
-                new String[]{"60 FPS · sesiones largas", "120 FPS · mayor fluidez y consumo"});
+                new String[]{"60 FPS", "120 FPS"});
         frameRateAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         frameRateSpinner.setAdapter(frameRateAdapter);
         frameRateSpinner.setSelection(prefs.getInt(PREF_TARGET_FPS, 60) == 120 ? 1 : 0);
         root.addView(frameRateSpinner, selectorParams());
-
-        autoHideTouch = new CheckBox(this);
-        autoHideTouch.setText("Ocultar botones táctiles al conectar un mando");
-        autoHideTouch.setTextColor(Color.WHITE);
-        autoHideTouch.setChecked(prefs.getBoolean(PREF_AUTO_HIDE_TOUCH, false));
-        root.addView(autoHideTouch, selectorParams());
-
-        addSectionLabel(root, "Carpeta de partidas");
-        saveFolderLabel = new TextView(this);
-        saveFolderLabel.setTextColor(Color.LTGRAY);
-        root.addView(saveFolderLabel, selectorParams());
-        saveFolderButton = new Button(this);
-        saveFolderButton.setText("Elegir carpeta de partidas");
-        saveFolderButton.setAllCaps(false);
-        saveFolderButton.setOnClickListener(v -> chooseSaveFolder());
-        root.addView(saveFolderButton, buttonParams());
-        internalSavesButton = new Button(this);
-        internalSavesButton.setText("Usar partidas internas");
-        internalSavesButton.setAllCaps(false);
-        internalSavesButton.setOnClickListener(v -> {
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                    .remove(PREF_SAVE_FOLDER).remove(PREF_SAVE_FOLDER_NAME).apply();
-            updateLauncherControls();
-        });
-        root.addView(internalSavesButton, buttonParams());
-        TextView saveHint = new TextView(this);
-        saveHint.setText("Si eliges una carpeta vacía, se copian tus partidas actuales. Si ya contiene partidas, se usarán esas. Las copias anteriores se conservan.");
-        saveHint.setTextColor(Color.LTGRAY);
-        saveHint.setTextSize(13f);
-        root.addView(saveHint, selectorParams());
 
         chooseGameButton = new Button(this);
         chooseGameButton.setAllCaps(false);
@@ -193,11 +143,60 @@ public final class MainActivity extends Activity {
         playParams.topMargin = dp(10);
         root.addView(playGameButton, playParams);
 
+        Button settingsButton = new Button(this);
+        settingsButton.setText("Ajustes");
+        settingsButton.setAllCaps(false);
+        root.addView(settingsButton, buttonParams());
+        LinearLayout settings = new LinearLayout(this);
+        settings.setOrientation(LinearLayout.VERTICAL);
+        settings.setGravity(Gravity.CENTER_HORIZONTAL);
+        settings.setVisibility(View.GONE);
+        root.addView(settings, selectorParams());
+        settingsButton.setOnClickListener(v -> {
+            boolean expanded = settings.getVisibility() != View.VISIBLE;
+            settings.setVisibility(expanded ? View.VISIBLE : View.GONE);
+            settingsButton.setText(expanded ? "Cerrar ajustes" : "Ajustes");
+        });
+
+        addSectionLabel(settings, "Idioma");
+        languageSpinner = new Spinner(this);
+        ArrayAdapter<String> languageAdapter = new ArrayAdapter<>(
+                this, android.R.layout.simple_spinner_item, LANGUAGE_LABELS);
+        languageAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        languageSpinner.setAdapter(languageAdapter);
+        settings.addView(languageSpinner, selectorParams());
+
+        languageSpinner.setSelection(languageIndex(prefs.getString(PREF_LANGUAGE, "english")));
+
+        autoHideTouch = new CheckBox(this);
+        autoHideTouch.setText("Ocultar controles al usar un mando");
+        autoHideTouch.setTextColor(Color.WHITE);
+        autoHideTouch.setChecked(prefs.getBoolean(PREF_AUTO_HIDE_TOUCH, false));
+        settings.addView(autoHideTouch, selectorParams());
+
+        addSectionLabel(settings, "Carpeta de partidas");
+        saveFolderLabel = new TextView(this);
+        saveFolderLabel.setTextColor(Color.LTGRAY);
+        settings.addView(saveFolderLabel, selectorParams());
+        saveFolderButton = new Button(this);
+        saveFolderButton.setText("Elegir carpeta");
+        saveFolderButton.setAllCaps(false);
+        saveFolderButton.setOnClickListener(v -> chooseSaveFolder());
+        settings.addView(saveFolderButton, buttonParams());
+        internalSavesButton = new Button(this);
+        internalSavesButton.setText("Usar partidas internas");
+        internalSavesButton.setAllCaps(false);
+        internalSavesButton.setOnClickListener(v -> {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .remove(PREF_SAVE_FOLDER).remove(PREF_SAVE_FOLDER_NAME).apply();
+            updateLauncherControls();
+        });
+        settings.addView(internalSavesButton, buttonParams());
         Button diagnosticsButton = new Button(this);
         diagnosticsButton.setText("Informe de diagnóstico");
         diagnosticsButton.setAllCaps(false);
         diagnosticsButton.setOnClickListener(v -> CrashReport.showLatest(this));
-        root.addView(diagnosticsButton, buttonParams());
+        settings.addView(diagnosticsButton, buttonParams());
 
         updateLauncherControls();
         return scroll;

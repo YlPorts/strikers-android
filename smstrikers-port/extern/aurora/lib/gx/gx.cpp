@@ -473,6 +473,7 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
       .alphaUpdate = cullMode == GX_CULL_ALL ? false : g_gxState.alphaUpdate,
       .colorUpdate = cullMode == GX_CULL_ALL ? false : g_gxState.colorUpdate,
   };
+  canonicalize_pipeline_config(config);
 }
 
 GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {
@@ -587,6 +588,7 @@ void initialize() noexcept {
 }
 
 void shutdown() noexcept {
+  clear_shader_cache();
   // TODO we should probably store this all in g_state.gx instead
   sSamplerBindGroupLayout = {};
   sTextureBindGroupLayout = {};

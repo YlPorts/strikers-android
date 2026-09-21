@@ -135,6 +135,17 @@ public class SaveFolderTest {
         assertThrows(SecurityException.class, () -> folder("selected").list("USA/Card A"));
     }
 
+    @Test public void cardProbeChecksTheProviderEvenWhenThePathIsCached() throws Exception {
+        assertFalse(selected.isDirectory("EUR/Card A"));
+        selected.prepareDirectories();
+        assertTrue(selected.isDirectory("EUR/Card A"));
+        assertTrue(new File(provider.disk, "selected/EUR/Card A").delete());
+        assertFalse(selected.isDirectory("EUR/Card A"));
+        assertTrue(selected.isDirectory("USA/Card A"));
+        provider.revoked = true;
+        assertThrows(SecurityException.class, () -> selected.isDirectory("USA/Card A"));
+    }
+
     @Test public void readOnlyFolderFailsValidationAndRemovesItsProbe() throws Exception {
         provider.denyWrites = true;
         assertThrows(IOException.class, () -> selected.validate());

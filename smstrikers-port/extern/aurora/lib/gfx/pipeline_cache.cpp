@@ -1,4 +1,5 @@
 #include "pipeline_cache.hpp"
+#include "wait_with_progress.hpp"
 
 #include "clear.hpp"
 #include "resources.hpp"
@@ -1046,6 +1047,11 @@ static size_t load_pipeline_cache_entries(ShaderType type, uint32_t configVersio
       continue;
     }
 
+    if constexpr (std::is_same_v<PipelineConfig, gx::PipelineConfig>) {
+      // Reuse caches from earlier builds without recompiling alpha-only variants.
+      gx::canonicalize_pipeline_config(config);
+    }
+
     find_pipeline_impl(type, config, [=] { return create(config); }, PipelinePriority::Background, firstFrameUsed);
     ++acceptedRows;
   }
@@ -1136,6 +1142,7 @@ PipelineRef find_pipeline(ShaderType type, const rmlui::PipelineConfig& config, 
 #endif
 
 void initialize_pipeline_cache() {
+  g_lastPipelineRef = std::numeric_limits<PipelineRef>::max();
   g_pipelineCacheBroken = false;
   g_pipelineCacheWriterStop = false;
   g_pipelineThreadEnd = false;
@@ -1160,7 +1167,10 @@ void initialize_pipeline_cache() {
 
 void shutdown_pipeline_cache() {
   if (g_hasPipelineThread) {
-    g_pipelineThreadEnd = true;
+    {
+      std::lock_guard lock{g_pipelineMutex};
+      g_pipelineThreadEnd = true;
+    }
     g_pipelineQueueCv.notify_all();
     g_pipelineReadyCv.notify_all();
     g_pipelineThread.join();
@@ -1199,8 +1209,20 @@ bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline) {
   if (g_hasPipelineThread && !g_pipelines.contains(ref) && g_pendingPipelines.contains(ref)) {
     touch_pending_pipeline(ref, PipelinePriority::Blocking);
     g_pipelineQueueCv.notify_one();
-    // wait releases the mutex: compilation can finish even with a full render queue.
-    g_pipelineReadyCv.wait(guard, [=] { return g_pipelines.contains(ref) || g_pipelineThreadEnd; });
+    const auto started = std::chrono::steady_clock::now();
+    bool reported = false;
+    detail::wait_with_progress(g_pipelineReadyCv, guard,
+        [=] { return g_pipelines.contains(ref) || g_pipelineThreadEnd; }, [&] {
+          if (webgpu::g_instance) webgpu::g_instance.ProcessEvents();
+          if (!reported && std::chrono::steady_clock::now() - started > std::chrono::milliseconds(250)) {
+            Log.warn("Waiting for effect pipeline {:x}", ref);
+            reported = true;
+          }
+        });
+    if (reported) {
+      Log.warn("Effect pipeline {:x} wait ended after {} ms", ref,
+               std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
+    }
   }
 #endif
   const auto it = g_pipelines.find(ref);

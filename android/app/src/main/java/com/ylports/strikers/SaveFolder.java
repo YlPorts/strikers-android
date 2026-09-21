@@ -111,6 +111,16 @@ final class SaveFolder {
         return resolve(directory, true, true) != null;
     }
 
+    // A cached document URI is not proof that the card still exists or is accessible.
+    synchronized boolean isDirectory(String directory) throws IOException {
+        Uri uri = resolve(directory, false, true);
+        if (uri == null) return false;
+        try (Cursor cursor = resolver.query(uri, new String[]{Document.COLUMN_MIME_TYPE}, Bundle.EMPTY, null)) {
+            if (cursor == null) throw new IOException("No se pudo comprobar la tarjeta.");
+            return cursor.moveToFirst() && Document.MIME_TYPE_DIR.equals(cursor.getString(0));
+        }
+    }
+
     // Called by JNI. Ownership of the descriptor passes to native code.
     synchronized int open(String path, int mode) throws IOException {
         Uri uri = resolve(path, mode == 2, false);

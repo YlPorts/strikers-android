@@ -213,7 +213,9 @@ ECardResult CardGciFolder::fileWrite(FileHandle& fh, const void* buf, size_t siz
         return ECardResult::READY;
       return ECardResult::IOERROR;
     }
-    return ECardResult::NOFILE;
+    // The directory already identified this file. An open failure (for example
+    // a revoked SAF write grant) is not permission to create a replacement save.
+    return ECardResult::IOERROR;
   }
 
   return ECardResult::NOCARD;
@@ -228,7 +230,7 @@ ECardResult CardGciFolder::fileRead(FileHandle& fh, void* dst, size_t size) {
         return ECardResult::READY;
       return ECardResult::IOERROR;
     }
-    return ECardResult::NOFILE;
+    return ECardResult::IOERROR;
   }
 
   return ECardResult::NOCARD;
@@ -504,7 +506,16 @@ const std::filesystem::path& CardGciFolder::cardFilename() const { return g_card
 ECardResult CardGciFolder::getError() const { return m_error; }
 
 ProbeResults CardGciFolder::probeCardFile(const std::filesystem::path& filename) {
-  if (!std::filesystem::exists(filename) || !std::filesystem::is_directory(filename))
+#if defined(__ANDROID__)
+  const auto path = io::fs_path_to_string(filename);
+  if (documents::handles(path)) {
+    if (!PortAndroidSaveIsDirectory || !PortAndroidSaveIsDirectory(path.c_str()))
+      return {ECardResult::NOCARD, 0, 0};
+    return {ECardResult::READY, static_cast<uint32_t>(ECardSize::Card2043Mb), BlockSize};
+  }
+#endif
+  std::error_code error;
+  if (!std::filesystem::is_directory(filename, error))
     return {ECardResult::NOCARD, 0, 0};
   return {ECardResult::READY, static_cast<uint32_t>(ECardSize::Card2043Mb), BlockSize};
 }

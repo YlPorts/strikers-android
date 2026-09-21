@@ -12,6 +12,7 @@
 extern "C" bool PortAndroidSaveEnabled() __attribute__((weak));
 extern "C" int PortAndroidSaveOpen(const char*, int) __attribute__((weak));
 extern "C" bool PortAndroidSaveMkdir(const char*) __attribute__((weak));
+extern "C" bool PortAndroidSaveIsDirectory(const char*) __attribute__((weak));
 extern "C" bool PortAndroidSaveDelete(const char*) __attribute__((weak));
 extern "C" bool PortAndroidSaveList(const char*, void (*)(const char*, void*), void*) __attribute__((weak));
 #endif
