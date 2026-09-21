@@ -30,7 +30,7 @@ final class DriverRuntime {
             if (!loader.isFile()) throw new IOException("packaged loader missing");
             File alias = new File(runtime, "libvulkan.so");
             // Only alias the read-only loader shipped in our APK. Imported libraries stay private.
-            try { Os.unlink(alias.getAbsolutePath()); } catch (android.system.ErrnoException ignored) { }
+            java.nio.file.Files.deleteIfExists(alias.toPath());
             Os.symlink(loader.getAbsolutePath(), alias.getAbsolutePath());
             Os.setenv("STRIKERS_DRIVER_DIR", driver.directory.getAbsolutePath() + "/", true);
             Os.setenv("STRIKERS_DRIVER_LIBRARY", driver.libraryName, true);

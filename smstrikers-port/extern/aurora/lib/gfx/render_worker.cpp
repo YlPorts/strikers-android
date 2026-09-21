@@ -48,8 +48,10 @@ void worker_main(std::stop_token token) {
       ZoneScopedN("QueueItem work");
       item->work();
     }
-    complete_sync(item->sync);
     g_pendingItems.fetch_sub(1, std::memory_order_acq_rel);
+    // Publish completion after retiring the item. A woken synchronizer must not
+    // observe this already-completed item as pending GPU work.
+    complete_sync(item->sync);
     if (item->type == ItemType::Shutdown) {
       break;
     }
