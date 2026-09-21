@@ -64,6 +64,14 @@ final class DriverStore {
 
     File pendingFile() { return new File(context.getFilesDir(), "gpu-driver-pending"); }
 
+    void markPending(String id) throws IOException {
+        if (find(id) == null) throw new IOException("El driver elegido ya no está instalado.");
+        try (FileOutputStream out = new FileOutputStream(pendingFile())) {
+            out.write(id.getBytes(StandardCharsets.UTF_8));
+            out.getFD().sync();
+        }
+    }
+
     String selectedId() {
         return context.getSharedPreferences(MainActivity.PREFS, Context.MODE_PRIVATE)
                 .getString(PREF_DRIVER, "");

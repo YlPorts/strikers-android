@@ -200,6 +200,7 @@ public final class GameBootstrapActivity extends Activity {
                 return;
             }
             RunLog.append(this, "bootstrap: disc validation OK");
+            DriverRuntime.armStartupGuard(this);
 
             RunLog.append(this, "bootstrap: attaching native stderr to durable log");
             nativeBeginRunLog(runLog.getAbsolutePath());

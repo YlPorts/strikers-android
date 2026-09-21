@@ -127,7 +127,7 @@ public class DriverStoreTest {
         DriverStore.Driver driver = install(files("", 26));
         File save = new File(context.getFilesDir(), "existing-save.gci");
         Files.write(save.toPath(), new byte[]{7, 8, 9});
-        Files.write(store.pendingFile().toPath(), driver.id.getBytes(StandardCharsets.UTF_8));
+        store.markPending(driver.id);
         assertTrue(store.failedPreviously(driver.id));
         assertFalse(store.failedPreviously(""));
         store.select("");

@@ -8,8 +8,10 @@ import java.io.IOException;
 /** Called only in :game, before the renderer starts. System mode never loads our loader. */
 final class DriverRuntime {
     static final String EXTRA_DRIVER = "com.ylports.strikers.DRIVER";
+    private static String activeId = "";
 
     static void prepare(Context context, String selectedId) {
+        activeId = "";
         try {
             for (String key : new String[]{"STRIKERS_VULKAN_PATH", "STRIKERS_DRIVER_DIR",
                     "STRIKERS_DRIVER_LIBRARY", "STRIKERS_DRIVER_HOOKS", "STRIKERS_DRIVER_TMP",
@@ -38,11 +40,25 @@ final class DriverRuntime {
             Os.setenv("STRIKERS_DRIVER_PENDING", store.pendingFile().getAbsolutePath(), true);
             // Set last: a partial setup must never redirect Dawn away from the system loader.
             Os.setenv("STRIKERS_VULKAN_PATH", runtime.getAbsolutePath() + "/", true);
+            activeId = driver.id;
             RunLog.append(context, "graphics: custom driver selected: " + driver.label());
         } catch (Exception e) {
             try { Os.unsetenv("STRIKERS_VULKAN_PATH"); Os.unsetenv("STRIKERS_DRIVER_ID"); }
             catch (android.system.ErrnoException ignored) { }
             RunLog.append(context, "graphics: using system driver after setup failure: " + e.getClass().getSimpleName());
+        }
+    }
+
+    static void armStartupGuard(Context context) {
+        if (activeId.isEmpty()) return;
+        try {
+            // Before dlopen, including dependency constructors; after disc validation.
+            new DriverStore(context).markPending(activeId);
+        } catch (Exception e) {
+            activeId = "";
+            try { Os.unsetenv("STRIKERS_VULKAN_PATH"); Os.unsetenv("STRIKERS_DRIVER_ID"); }
+            catch (android.system.ErrnoException ignored) { }
+            RunLog.append(context, "graphics: system driver; startup guard could not be prepared");
         }
     }
 }
