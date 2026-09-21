@@ -6,6 +6,7 @@
 
 #include "gx_test_common.hpp"
 #include "__gx.h"
+#include "gfx/runtime_metrics.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -16,15 +17,41 @@
 
 using aurora::gx::g_gxState;
 
+namespace aurora::gx::fifo {
+u32 prepare_indices_for_testing(ByteBuffer&, GXPrimitive, u16) noexcept;
+}
+
+TEST(GxPrimitiveIndices, LargeStripKeepsFullIndexCount) {
+  aurora::ByteBuffer indices;
+  const auto count = aurora::gx::fifo::prepare_indices_for_testing(indices, GX_TRIANGLESTRIP, 65535);
+  EXPECT_EQ(count, 196599u);
+  EXPECT_EQ(indices.size(), size_t(count) * sizeof(u16));
+  const auto* values = reinterpret_cast<const u16*>(indices.data());
+  EXPECT_EQ(values[count - 1], 65534u);
+}
+
+TEST(GxPrimitiveIndices, ShortPrimitivesDoNotUnderflowAllocation) {
+  for (const auto primitive : {GX_TRIANGLEFAN, GX_TRIANGLESTRIP}) {
+    aurora::ByteBuffer indices;
+    EXPECT_EQ(aurora::gx::fifo::prepare_indices_for_testing(indices, primitive, 2), 2u);
+    EXPECT_EQ(indices.size(), 2 * sizeof(u16));
+  }
+}
+
 namespace aurora::gfx {
 extern uint32_t g_testDrawCount;
 extern std::atomic<uint32_t> g_testProcessedDrawCount;
+extern size_t g_testVertexBytes, g_testIndexBytes, g_testStorageBytes;
 namespace testing {
 extern std::atomic<uint32_t> beginOffscreenCount;
 extern std::atomic<uint32_t> endOffscreenCount;
 extern std::atomic<uint32_t> resolvePassCount;
 extern std::atomic<uint32_t> offscreenWidth;
 extern std::atomic<uint32_t> offscreenHeight;
+extern uint32_t clearMask;
+extern Vec4<float> lastClearColor;
+extern float lastClearDepth;
+extern bool hadResolveTexture;
 } // namespace testing
 } // namespace aurora::gfx
 
@@ -84,6 +111,100 @@ static bool has_aurora_cmd(const std::vector<u8>& bytes, u16 cmd) {
 static u32 read_fifo_u32(const std::vector<u8>& bytes, size_t offset) {
   return (static_cast<u32>(bytes[offset]) << 24) | (static_cast<u32>(bytes[offset + 1]) << 16) |
          (static_cast<u32>(bytes[offset + 2]) << 8) | static_cast<u32>(bytes[offset + 3]);
+}
+
+TEST_F(GXFifoTest, CulledPolygonsConsumePayloadWithoutGpuUploads) {
+  using namespace aurora::gfx;
+  g_testDrawCount = 0;
+  g_testVertexBytes = g_testIndexBytes = g_testStorageBytes = 0;
+  runtime_metrics::culledDraws.store(0);
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_U8, 0);
+  GXSetCullMode(GX_CULL_ALL);
+  for (const auto prim : {GX_TRIANGLES, GX_QUADS, GX_TRIANGLESTRIP, GX_TRIANGLEFAN}) {
+    const u16 count = prim == GX_TRIANGLES ? 3 : 4;
+    GXBegin(prim, GX_VTXFMT0, count);
+    for (u16 i = 0; i < count; ++i) {
+      // Bytes resembling opcodes must remain vertex data, not change GX state.
+      GXPosition3u8(0x61, 0x41, static_cast<u8>(i));
+    }
+    GXEnd();
+  }
+  GXSetAlphaUpdate(GX_FALSE);
+  const auto bytes = flush_and_capture();
+  reset_gx_state();
+  decode_fifo(bytes);
+  EXPECT_EQ(g_testDrawCount, 0u);
+  EXPECT_EQ(g_testVertexBytes, 0u);
+  EXPECT_EQ(g_testIndexBytes, 0u);
+  EXPECT_EQ(g_testStorageBytes, 0u);
+  EXPECT_EQ(runtime_metrics::culledDraws.load(), 4u);
+  EXPECT_EQ(g_gxState.cullMode, GX_CULL_ALL);
+  EXPECT_FALSE(g_gxState.alphaUpdate);
+  EXPECT_NE(g_gxState.dirty, 0u);
+}
+
+TEST_F(GXFifoTest, CullAllKeepsLinesPointsAndFollowingVisibleTriangles) {
+  using namespace aurora::gfx;
+  g_testDrawCount = 0;
+  g_testVertexBytes = g_testIndexBytes = g_testStorageBytes = 0;
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_U8, 0);
+  GXSetCullMode(GX_CULL_ALL);
+  for (const auto prim : {GX_TRIANGLES, GX_LINES, GX_LINESTRIP, GX_POINTS}) {
+    GXBegin(prim, GX_VTXFMT0, 3);
+    for (u16 i = 0; i < 3; ++i) GXPosition3u8(i, i, i);
+    GXEnd();
+  }
+  GXSetCullMode(GX_CULL_BACK);
+  GXBegin(GX_TRIANGLES, GX_VTXFMT0, 3);
+  for (u16 i = 0; i < 3; ++i) GXPosition3u8(i, i, i);
+  GXEnd();
+  const auto bytes = flush_and_capture();
+  reset_gx_state();
+  decode_fifo(bytes);
+  EXPECT_EQ(g_testDrawCount, 4u);
+  EXPECT_EQ(g_testVertexBytes, 4u * 9u);
+  EXPECT_EQ(g_gxState.cullMode, GX_CULL_BACK);
+}
+
+TEST_F(GXFifoTest, CulledOptimizedDisplayListConsumesIndicesAndVertices) {
+  using namespace aurora::gfx;
+  g_testDrawCount = 0;
+  g_testVertexBytes = g_testIndexBytes = g_testStorageBytes = 0;
+  runtime_metrics::culledDraws.store(0);
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_U8, 0);
+  for (const auto mode : {GX_CULL_ALL, GX_CULL_BACK}) {
+    GXSetCullMode(mode);
+    __GXSetDirtyState();
+    using namespace aurora::gx::fifo;
+    write_u8(GX_AURORA);
+    write_u16(GX_AURORA_DRAW_INDEXED);
+    write_u8(static_cast<u8>(GX_TRIANGLES) | static_cast<u8>(GX_VTXFMT0));
+    write_u16(3);
+    write_u32(3);
+    const std::array<u16, 3> indices{0, 1, 2};
+    write_data(indices.data(), sizeof(indices));
+    for (u16 i = 0; i < 3; ++i) {
+      write_u8(0x61);
+      write_u8(0x41);
+      write_u8(static_cast<u8>(i));
+    }
+  }
+  GXSetColorUpdate(GX_FALSE);
+  const auto bytes = flush_and_capture();
+  reset_gx_state();
+  decode_fifo(bytes);
+  EXPECT_EQ(g_testDrawCount, 1u);
+  EXPECT_EQ(g_testVertexBytes, 9u);
+  EXPECT_EQ(g_testIndexBytes, 3u * sizeof(u16));
+  EXPECT_EQ(runtime_metrics::culledDraws.load(), 1u);
+  EXPECT_EQ(g_gxState.cullMode, GX_CULL_BACK);
+  EXPECT_FALSE(g_gxState.colorUpdate);
 }
 
 TEST_F(GXFifoTest, FifoPublishesOnlyAtExplicitBoundary) {
@@ -272,10 +393,20 @@ TEST_F(GXFifoTest, DrainWaitsForDrawDoneCallbackToReturn) {
   std::this_thread::sleep_for(std::chrono::milliseconds{10});
   EXPECT_FALSE(drainReturned.load(std::memory_order_acquire));
 
+  // A diagnostic query must return even while a callback prevents drain from
+  // completing. It must identify the outstanding work, not block on that work.
+  const auto blocked = aurora::gx::fifo::runtime_progress();
+  EXPECT_EQ(blocked.stage, 3u);
+  EXPECT_GT(blocked.published, blocked.processed);
+  EXPECT_EQ(blocked.drainTarget, blocked.published);
+
   sBlockingCallbackMayReturn.store(true, std::memory_order_release);
   EXPECT_TRUE(wait_for(drainReturned, true));
   drainThread.join();
   EXPECT_TRUE(sBlockingCallbackReturned.load(std::memory_order_acquire));
+  const auto completed = aurora::gx::fifo::runtime_progress();
+  EXPECT_EQ(completed.published, completed.processed);
+  EXPECT_EQ(completed.drainTarget, 0u);
 
   GXSetDrawDoneCallback(nullptr);
   aurora::gx::fifo::end_frame();
@@ -295,6 +426,25 @@ TEST_F(GXFifoTest, AuroraSyncGXProcessesTailWithoutDrawDoneCallback) {
   EXPECT_EQ(g_gxState.bpRegCache[0x41], 0x410A0B0Cu);
   EXPECT_FALSE(sDrawDoneCallbackCalled.load(std::memory_order_acquire));
   GXSetDrawDoneCallback(nullptr);
+  aurora::gx::fifo::end_frame();
+}
+
+TEST_F(GXFifoTest, ProducerCanGrowWhileWorkerConsumesPublishedPrefix) {
+  aurora::gx::fifo::init();
+  aurora::gx::fifo::begin_frame();
+  constexpr uint32_t commands = 100000;
+  for (uint32_t i = 0; i < commands; ++i) {
+    const std::array<u8, 5> command{GX_LOAD_BP_REG, 0x41, u8(i >> 16), u8(i >> 8), u8(i)};
+    aurora::gx::fifo::write_data(command.data(), command.size());
+    if (i % 16 == 0) aurora::gx::fifo::publish();
+  }
+  aurora::gx::fifo::drain();
+  EXPECT_EQ(g_gxState.bpRegCache[0x41], 0x41000000u | (commands - 1));
+  EXPECT_GE(aurora::gx::fifo::detail::sBufferCapacity, commands * 5);
+  const auto progress = aurora::gx::fifo::runtime_progress();
+  EXPECT_EQ(progress.published, commands * 5);
+  EXPECT_EQ(progress.processed, progress.published);
+  EXPECT_EQ(progress.drainTarget, 0u);
   aurora::gx::fifo::end_frame();
 }
 
@@ -1230,6 +1380,31 @@ TEST_F(GXFifoTest, TevColorS10_Reg2) {
 // ============================================================================
 // CP registers (require __GXSetDirtyState() flush)
 // ============================================================================
+
+TEST_F(GXFifoTest, ClearOnlyPreservesWriteMasksAndSkipsCopyCache) {
+  using namespace aurora::gfx::testing;
+  for (unsigned mask = 0; mask < 8; ++mask) {
+    resolvePassCount.store(0);
+    GXSetColorUpdate((mask & 1) != 0);
+    GXSetAlphaUpdate((mask & 2) != 0);
+    GXSetZMode(GX_FALSE, GX_LEQUAL, (mask & 4) != 0);
+    GXSetCopyClear({40, 80, 120, 160}, 0xFFFFFF);
+    AuroraGXClearEFB();
+    const auto bytes = capture_fifo();
+    EXPECT_TRUE(has_aurora_cmd(bytes, GX_AURORA_CLEAR_EFB));
+    decode_fifo(bytes);
+    EXPECT_EQ(resolvePassCount.load(), mask ? 1u : 0u);
+    if (mask) {
+      EXPECT_EQ(clearMask, mask);
+      EXPECT_FALSE(hadResolveTexture);
+      EXPECT_NEAR(lastClearColor[0], 40.f / 255.f, 0.0001f);
+      EXPECT_NEAR(lastClearColor[3], 160.f / 255.f, 0.0001f);
+      EXPECT_EQ(lastClearDepth, aurora::gx::clear_depth_value());
+    }
+    EXPECT_TRUE(g_gxState.copyTextureCache.empty());
+    EXPECT_TRUE(g_gxState.copyTextures.empty());
+  }
+}
 
 // --- GXClearVtxDesc ---
 

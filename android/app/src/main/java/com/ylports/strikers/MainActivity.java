@@ -11,20 +11,27 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.lang.ref.WeakReference;
 
 /** Clean launcher for the Android release build. */
 public final class MainActivity extends Activity {
     private static final int PICK_GAME_IMAGE = 1001;
+    static final int PICK_SAVE_FOLDER = 1002;
 
     static final String PREFS = "strikers_android";
     static final String PREF_GAME_URI = "game_image_uri";
     static final String PREF_LANGUAGE = "game_language";
     static final String PREF_RESOLUTION_ROWS = "render_rows";
+    static final String PREF_AUTO_HIDE_TOUCH = "auto_hide_touch_with_gamepad";
+    static final String PREF_TARGET_FPS = "target_fps";
+    static final String PREF_SAVE_FOLDER = "save_folder_uri";
+    static final String PREF_SAVE_FOLDER_NAME = "save_folder_name";
 
     private static final String[] LANGUAGE_LABELS = {
             "English", "Español", "Français", "Deutsch", "Italiano"
@@ -34,18 +41,22 @@ public final class MainActivity extends Activity {
     };
 
     private static final String[] RESOLUTION_LABELS = {
-            "448p · rendimiento",
-            "720p · recomendado",
-            "900p · equilibrado",
-            "1080p · calidad",
-            "Auto · pantalla"
+            "448p", "720p", "900p", "1080p", "Automática"
     };
     private static final int[] RESOLUTION_ROWS = {448, 720, 900, 1080, 0};
 
     private Spinner languageSpinner;
     private Spinner resolutionSpinner;
+    private Spinner frameRateSpinner;
     private Button chooseGameButton;
     private Button playGameButton;
+    private CheckBox autoHideTouch;
+    private boolean launchPending;
+    private static volatile boolean folderPending;
+    private static WeakReference<MainActivity> resumedLauncher = new WeakReference<>(null);
+    private TextView saveFolderLabel;
+    private Button saveFolderButton;
+    private Button internalSavesButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,7 +73,14 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumedLauncher = new WeakReference<>(this);
+        launchPending = false;
         updateLauncherControls();
+    }
+
+    @Override protected void onPause() {
+        if (resumedLauncher.get() == this) resumedLauncher.clear();
+        super.onPause();
     }
 
     private View buildLauncherView() {
@@ -88,14 +106,6 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        addSectionLabel(root, "Idioma");
-        languageSpinner = new Spinner(this);
-        ArrayAdapter<String> languageAdapter = new ArrayAdapter<>(
-                this, android.R.layout.simple_spinner_item, LANGUAGE_LABELS);
-        languageAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        languageSpinner.setAdapter(languageAdapter);
-        root.addView(languageSpinner, selectorParams());
-
         addSectionLabel(root, "Resolución interna");
         resolutionSpinner = new Spinner(this);
         ArrayAdapter<String> resolutionAdapter = new ArrayAdapter<>(
@@ -105,10 +115,18 @@ public final class MainActivity extends Activity {
         root.addView(resolutionSpinner, selectorParams());
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        languageSpinner.setSelection(languageIndex(
-                prefs.getString(PREF_LANGUAGE, "english")));
         resolutionSpinner.setSelection(resolutionIndex(
                 prefs.getInt(PREF_RESOLUTION_ROWS, 720)));
+
+        addSectionLabel(root, "Fotogramas");
+        frameRateSpinner = new Spinner(this);
+        ArrayAdapter<String> frameRateAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item,
+                new String[]{"60 FPS", "120 FPS"});
+        frameRateAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        frameRateSpinner.setAdapter(frameRateAdapter);
+        frameRateSpinner.setSelection(prefs.getInt(PREF_TARGET_FPS, 60) == 120 ? 1 : 0);
+        root.addView(frameRateSpinner, selectorParams());
 
         chooseGameButton = new Button(this);
         chooseGameButton.setAllCaps(false);
@@ -124,6 +142,72 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams playParams = buttonParams();
         playParams.topMargin = dp(10);
         root.addView(playGameButton, playParams);
+
+        Button settingsButton = new Button(this);
+        settingsButton.setText("Ajustes");
+        settingsButton.setAllCaps(false);
+        root.addView(settingsButton, buttonParams());
+        LinearLayout settings = new LinearLayout(this);
+        settings.setOrientation(LinearLayout.VERTICAL);
+        settings.setGravity(Gravity.CENTER_HORIZONTAL);
+        settings.setVisibility(View.GONE);
+        root.addView(settings, selectorParams());
+        settingsButton.setOnClickListener(v -> {
+            boolean expanded = settings.getVisibility() != View.VISIBLE;
+            settings.setVisibility(expanded ? View.VISIBLE : View.GONE);
+            settingsButton.setText(expanded ? "Cerrar ajustes" : "Ajustes");
+        });
+
+        addSectionLabel(settings, "Idioma");
+        languageSpinner = new Spinner(this);
+        ArrayAdapter<String> languageAdapter = new ArrayAdapter<>(
+                this, android.R.layout.simple_spinner_item, LANGUAGE_LABELS);
+        languageAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        languageSpinner.setAdapter(languageAdapter);
+        settings.addView(languageSpinner, selectorParams());
+
+        languageSpinner.setSelection(languageIndex(prefs.getString(PREF_LANGUAGE, "english")));
+
+        autoHideTouch = new CheckBox(this);
+        autoHideTouch.setText("Ocultar controles al usar un mando");
+        autoHideTouch.setTextColor(Color.WHITE);
+        autoHideTouch.setChecked(prefs.getBoolean(PREF_AUTO_HIDE_TOUCH, false));
+        settings.addView(autoHideTouch, selectorParams());
+
+        Button graphicsButton = new Button(this);
+        graphicsButton.setText("Gráficos");
+        graphicsButton.setAllCaps(false);
+        graphicsButton.setOnClickListener(v -> GraphicsSettings.show(this));
+        settings.addView(graphicsButton, buttonParams());
+        Button driversButton = new Button(this);
+        driversButton.setText("Drivers gráficos");
+        driversButton.setAllCaps(false);
+        driversButton.setOnClickListener(v -> startActivity(new Intent(this, DriversActivity.class)));
+        settings.addView(driversButton, buttonParams());
+
+        addSectionLabel(settings, "Carpeta de partidas");
+        saveFolderLabel = new TextView(this);
+        saveFolderLabel.setTextColor(Color.LTGRAY);
+        settings.addView(saveFolderLabel, selectorParams());
+        saveFolderButton = new Button(this);
+        saveFolderButton.setText("Elegir carpeta");
+        saveFolderButton.setAllCaps(false);
+        saveFolderButton.setOnClickListener(v -> chooseSaveFolder());
+        settings.addView(saveFolderButton, buttonParams());
+        internalSavesButton = new Button(this);
+        internalSavesButton.setText("Usar partidas internas");
+        internalSavesButton.setAllCaps(false);
+        internalSavesButton.setOnClickListener(v -> {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .remove(PREF_SAVE_FOLDER).remove(PREF_SAVE_FOLDER_NAME).apply();
+            updateLauncherControls();
+        });
+        settings.addView(internalSavesButton, buttonParams());
+        Button diagnosticsButton = new Button(this);
+        diagnosticsButton.setText("Informe de diagnóstico");
+        diagnosticsButton.setAllCaps(false);
+        diagnosticsButton.setOnClickListener(v -> CrashReport.showLatest(this));
+        settings.addView(diagnosticsButton, buttonParams());
 
         updateLauncherControls();
         return scroll;
@@ -159,7 +243,16 @@ public final class MainActivity extends Activity {
             chooseGameButton.setText(hasGame ? "Cambiar ROM" : "Seleccionar ROM");
         }
         if (playGameButton != null) {
-            playGameButton.setEnabled(hasGame);
+            playGameButton.setEnabled(hasGame && !launchPending && !folderPending);
+        }
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        boolean external = prefs.getString(PREF_SAVE_FOLDER, null) != null;
+        if (saveFolderLabel != null) saveFolderLabel.setText(external
+                ? prefs.getString(PREF_SAVE_FOLDER_NAME, "Carpeta seleccionada") : "Almacenamiento de la aplicación");
+        if (saveFolderButton != null) saveFolderButton.setEnabled(!folderPending && !launchPending);
+        if (internalSavesButton != null) {
+            internalSavesButton.setVisibility(external ? View.VISIBLE : View.GONE);
+            internalSavesButton.setEnabled(!folderPending && !launchPending);
         }
     }
 
@@ -183,10 +276,65 @@ public final class MainActivity extends Activity {
         startActivityForResult(intent, PICK_GAME_IMAGE);
     }
 
+    private void chooseSaveFolder() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        try {
+            startActivityForResult(intent, PICK_SAVE_FOLDER);
+        } catch (Exception e) {
+            Toast.makeText(this, "No se pudo abrir el selector de carpetas.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void acceptSaveFolder(Intent data) {
+        Uri folder = data.getData();
+        if (folder == null || folderPending) return;
+        int required = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+        try {
+            if ((data.getFlags() & required) != required) throw new SecurityException("Sin permiso de escritura");
+            getContentResolver().takePersistableUriPermission(folder, required);
+        } catch (Exception e) {
+            Toast.makeText(this, "La carpeta necesita permiso de lectura y escritura.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        folderPending = true;
+        updateLauncherControls();
+        String previous = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_SAVE_FOLDER, null);
+        new Thread(() -> {
+            String error = null;
+            try {
+                SaveFolder destination = new SaveFolder(getApplicationContext(), folder);
+                destination.validate();
+                if (!folder.toString().equals(previous)) destination.copyIfEmpty(getFilesDir(),
+                        previous == null ? null : new SaveFolder(getApplicationContext(), Uri.parse(previous)));
+                destination.prepareDirectories();
+                String name = destination.displayName();
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putString(PREF_SAVE_FOLDER, folder.toString()).putString(PREF_SAVE_FOLDER_NAME, name).commit();
+            } catch (Exception e) {
+                error = "No se pudo usar esa carpeta. Elige una carpeta local con permiso de escritura.";
+                RunLog.append(this, "save folder selection failed: " + e);
+            }
+            final String result = error;
+            runOnUiThread(() -> {
+                folderPending = false;
+                MainActivity current = resumedLauncher.get();
+                if (current == null || current.isFinishing() || current.isDestroyed()) return;
+                current.updateLauncherControls();
+                Toast.makeText(current, result == null ? "Carpeta de partidas guardada." : result, Toast.LENGTH_LONG).show();
+            });
+        }, "strikers-save-folder").start();
+    }
+
     @Override
     @SuppressWarnings("deprecation")
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == PICK_SAVE_FOLDER) {
+            if (resultCode == RESULT_OK && data != null) acceptSaveFolder(data);
+            return;
+        }
         if (requestCode != PICK_GAME_IMAGE || resultCode != RESULT_OK || data == null) {
             return;
         }
@@ -210,6 +358,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean launchGame() {
+        if (launchPending || folderPending) return false;
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         String saved = prefs.getString(PREF_GAME_URI, null);
         if (saved == null) {
@@ -230,25 +379,37 @@ public final class MainActivity extends Activity {
 
         String language = LANGUAGE_VALUES[languageIndex];
         int rows = RESOLUTION_ROWS[resolutionIndex];
+        int targetFps = frameRateSpinner.getSelectedItemPosition() == 1 ? 120 : 60;
         prefs.edit()
                 .putString(PREF_LANGUAGE, language)
                 .putInt(PREF_RESOLUTION_ROWS, rows)
+                .putInt(PREF_TARGET_FPS, targetFps)
+                .putBoolean(PREF_AUTO_HIDE_TOUCH, autoHideTouch.isChecked())
                 .apply();
 
         RunLog.reset(this, "launcher: Jugar; language=" + language
-                + " render_rows=" + (rows == 0 ? "auto" : rows));
+                + " render_rows=" + (rows == 0 ? "auto" : rows) + " fps_limit=" + targetFps);
 
         Intent game = new Intent();
         game.setClassName(getPackageName(), getPackageName() + ".GameBootstrapActivity");
         game.putExtra(GameBootstrapActivity.EXTRA_GAME_URI, saved);
         game.putExtra(GameBootstrapActivity.EXTRA_LANGUAGE, language);
         game.putExtra(GameBootstrapActivity.EXTRA_RENDER_ROWS, rows);
+        game.putExtra(GameBootstrapActivity.EXTRA_TARGET_FPS, targetFps);
+        game.putExtra(GameBootstrapActivity.EXTRA_SAVE_FOLDER, prefs.getString(PREF_SAVE_FOLDER, null));
+        game.putExtra(GameBootstrapActivity.EXTRA_AUTO_HIDE_TOUCH, autoHideTouch.isChecked());
+        GraphicsSettings.putLaunchExtras(game, prefs);
+        game.putExtra(DriverRuntime.EXTRA_DRIVER, prefs.getString(DriverStore.PREF_DRIVER, ""));
         game.setData(Uri.parse(saved));
         game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
+            launchPending = true;
+            updateLauncherControls();
             startActivity(game);
             return true;
         } catch (Exception e) {
+            launchPending = false;
+            updateLauncherControls();
             RunLog.append(this, "launcher: startActivity failed: "
                     + e.getClass().getSimpleName() + ": " + e.getMessage());
             Toast.makeText(this, "No se pudo iniciar el juego.", Toast.LENGTH_LONG).show();

@@ -4,19 +4,21 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <uses-feature
-        android:glEsVersion="0x00030000"
+        android:glEsVersion="0x00030001"
         android:required="false" />
 
     <application
         android:name=".DiagnosticApplication"
         android:allowBackup="false"
-        android:extractNativeLibs="false"
+        android:extractNativeLibs="true"
         android:hardwareAccelerated="true"
         android:hasFragileUserData="true"
         android:icon="@drawable/ic_launcher"
         android:roundIcon="@drawable/ic_launcher"
         android:label="Strikers Android"
         android:theme="@android:style/Theme.Material.NoActionBar">
+
+        <activity android:name=".DriversActivity" android:exported="false" />
 
         <activity
             android:name=".MainActivity"
@@ -33,8 +35,7 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:process=":game"
-            android:screenOrientation="sensorLandscape"
-            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <activity
             android:name=".StrikersActivity"

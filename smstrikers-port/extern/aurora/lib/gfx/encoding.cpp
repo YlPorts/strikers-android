@@ -9,6 +9,7 @@
 #include "clear.hpp"
 #include "depth_peek.hpp"
 #include "pipeline_cache.hpp"
+#include "runtime_metrics.hpp"
 #include "tex_copy_conv.hpp"
 #include "tex_palette_conv.hpp"
 #include "../gx/gx.hpp"
@@ -112,6 +113,8 @@ void execute_encoder_task(wgpu::CommandEncoder& cmd, FramePacket& frame, const E
 void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, RenderPass& passInfo) {
   ZoneScoped;
   g_currentPipeline = UINTPTR_MAX;
+  gx::reset_render_bindings();
+  DrawEncoder previousEncoder = nullptr;
 #ifdef AURORA_GFX_DEBUG_GROUPS
   std::vector<std::string> lastDebugGroupStack;
 #endif
@@ -159,11 +162,19 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
     case CommandType::Draw: {
       auto& draw = cmd.data.draw;
       if (draw.encoder != nullptr) {
+        if (previousEncoder != draw.encoder) {
+          // A clear or another built-in encoder may replace bindings/layouts.
+          gx::reset_render_bindings();
+          g_currentPipeline = UINTPTR_MAX;
+          previousEncoder = draw.encoder;
+        }
         draw.encoder(draw.payload.data(), pass, passInfo);
       }
     } break;
     case CommandType::CustomDraw: {
       render_custom_draw(cmd.data.customDraw, pass, passInfo);
+      previousEncoder = nullptr;
+      gx::reset_render_bindings();
       g_currentPipeline = UINTPTR_MAX;
       pass.SetBindGroup(0, resources().staticBindGroup);
       pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
@@ -204,54 +215,60 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
     return;
   }
 
-  std::array<wgpu::RenderPassColorAttachment, MaxColorAttachments> attachments{};
-  for (uint32_t i = 0; i < passInfo.colorAttachmentCount; ++i) {
-    const auto& source = passInfo.colorAttachments[i];
-    attachments[i] = {
-        .view = source.view,
-        .resolveTarget = source.resolveView,
-        .loadOp = source.loadOp != wgpu::LoadOp::Undefined ? source.loadOp
-                                                           : (source.clear ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load),
-        .storeOp = source.storeOp,
-        .clearValue =
-            {
-                .r = source.clearValue.x(),
-                .g = source.clearValue.y(),
-                .b = source.clearValue.z(),
-                .a = source.clearValue.w(),
-            },
+  if (passInfo.needs_attachment_pass()) {
+    std::array<wgpu::RenderPassColorAttachment, MaxColorAttachments> attachments{};
+    for (uint32_t i = 0; i < passInfo.colorAttachmentCount; ++i) {
+      const auto& source = passInfo.colorAttachments[i];
+      attachments[i] = {
+          .view = source.view,
+          .resolveTarget = source.resolveView,
+          .loadOp = source.loadOp != wgpu::LoadOp::Undefined ? source.loadOp
+                                                             : (source.clear ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load),
+          .storeOp = source.storeOp,
+          .clearValue =
+              {
+                  .r = source.clearValue.x(),
+                  .g = source.clearValue.y(),
+                  .b = source.clearValue.z(),
+                  .a = source.clearValue.w(),
+              },
+      };
+    }
+    wgpu::RenderPassDepthStencilAttachment depthStencilAttachment{};
+    const wgpu::RenderPassDepthStencilAttachment* depthStencilAttachmentPtr = nullptr;
+    if (passInfo.depthStencilView) {
+      depthStencilAttachment = {
+          .view = passInfo.depthStencilView,
+          .depthLoadOp = passInfo.hasDepth ? (passInfo.depthLoadOp != wgpu::LoadOp::Undefined
+                                                  ? passInfo.depthLoadOp
+                                                  : (passInfo.clearDepth ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load))
+                                           : wgpu::LoadOp::Undefined,
+          .depthStoreOp = passInfo.hasDepth ? passInfo.depthStoreOp : wgpu::StoreOp::Undefined,
+          .depthClearValue = passInfo.clearDepthValue,
+          .stencilLoadOp = passInfo.hasStencil ? passInfo.stencilLoadOp : wgpu::LoadOp::Undefined,
+          .stencilStoreOp = passInfo.hasStencil ? passInfo.stencilStoreOp : wgpu::StoreOp::Undefined,
+          .stencilClearValue = passInfo.stencilClearValue,
+      };
+      depthStencilAttachmentPtr = &depthStencilAttachment;
+    }
+    const auto label = passInfo.label.empty() ? fmt::format("Render pass {}", passIndex)
+                                              : fmt::format("{} {}", passInfo.label, passIndex);
+    const wgpu::RenderPassDescriptor renderPassDescriptor{
+        .label = label.c_str(),
+        .colorAttachmentCount = passInfo.colorAttachmentCount,
+        .colorAttachments = attachments.data(),
+        .depthStencilAttachment = depthStencilAttachmentPtr,
+        .timestampWrites = webgpu::gpu_prof::pass_writes(label),
     };
-  }
-  wgpu::RenderPassDepthStencilAttachment depthStencilAttachment{};
-  const wgpu::RenderPassDepthStencilAttachment* depthStencilAttachmentPtr = nullptr;
-  if (passInfo.depthStencilView) {
-    depthStencilAttachment = {
-        .view = passInfo.depthStencilView,
-        .depthLoadOp = passInfo.hasDepth ? (passInfo.depthLoadOp != wgpu::LoadOp::Undefined
-                                                ? passInfo.depthLoadOp
-                                                : (passInfo.clearDepth ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load))
-                                         : wgpu::LoadOp::Undefined,
-        .depthStoreOp = passInfo.hasDepth ? passInfo.depthStoreOp : wgpu::StoreOp::Undefined,
-        .depthClearValue = passInfo.clearDepthValue,
-        .stencilLoadOp = passInfo.hasStencil ? passInfo.stencilLoadOp : wgpu::LoadOp::Undefined,
-        .stencilStoreOp = passInfo.hasStencil ? passInfo.stencilStoreOp : wgpu::StoreOp::Undefined,
-        .stencilClearValue = passInfo.stencilClearValue,
-    };
-    depthStencilAttachmentPtr = &depthStencilAttachment;
-  }
-  const auto label = passInfo.label.empty() ? fmt::format("Render pass {}", passIndex)
-                                            : fmt::format("{} {}", passInfo.label, passIndex);
-  const wgpu::RenderPassDescriptor renderPassDescriptor{
-      .label = label.c_str(),
-      .colorAttachmentCount = passInfo.colorAttachmentCount,
-      .colorAttachments = attachments.data(),
-      .depthStencilAttachment = depthStencilAttachmentPtr,
-      .timestampWrites = webgpu::gpu_prof::pass_writes(label),
-  };
 
-  auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
-  render_pass(pass, frame, passInfo);
-  pass.End();
+    auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
+    render_pass(pass, frame, passInfo);
+    pass.End();
+  } else {
+    // Only omit loading/storing unchanged attachments. The copy, conversion
+    // and snapshot consumers below must still execute in their original order.
+    runtime_metrics::emptyAttachmentPasses.fetch_add(1, std::memory_order_relaxed);
+  }
 
   if (passInfo.captureDepthSnapshot) {
     depth_peek::encode_frame_snapshot(cmd, passInfo.copySourceDepthView,

@@ -25,7 +25,16 @@ public final class RunLog {
     }
 
     public static void reset(Context context, String message) {
-        write(context, message, false);
+        write(context, "session_version=" + version(context) + " " + message, false);
+    }
+
+    static String version(Context context) {
+        if (context == null) return "unknown";
+        try {
+            return context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName;
+        } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
+            return "unknown";
+        }
     }
 
     public static void append(Context context, String message) {
@@ -38,8 +47,8 @@ public final class RunLog {
         }
         synchronized (LOCK) {
             try (FileOutputStream out = new FileOutputStream(file(context), append)) {
-                String line = SystemClock.elapsedRealtime()
-                        + "ms pid=" + Process.myPid()
+                String line = SystemClock.uptimeMillis()
+                        + "ms clock=monotonic pid=" + Process.myPid()
                         + " tid=" + Process.myTid()
                         + " " + message + "\n";
                 out.write(line.getBytes(StandardCharsets.UTF_8));

@@ -11,13 +11,13 @@
 namespace aurora::gfx::render_worker {
 namespace {
 constexpr size_t QueueCapacity = 256;
-constexpr auto IdlePumpInterval = std::chrono::milliseconds{1};
 
 BoundedQueue g_queue{QueueCapacity};
 thread::Thread g_thread;
 std::atomic_bool g_running = false;
 std::atomic_size_t g_pendingItems = 0;
-std::thread::id g_workerThreadId;
+thread_local bool g_isWorkerThread = false;
+std::atomic_uint64_t g_progress = 0;
 
 void complete_sync(const std::shared_ptr<SyncState>& sync) {
   if (!sync) {
@@ -32,30 +32,31 @@ void complete_sync(const std::shared_ptr<SyncState>& sync) {
 }
 
 void worker_main(std::stop_token token) {
-  g_workerThreadId = std::this_thread::get_id();
+  g_isWorkerThread = true;
+  std::stop_callback wakeOnStop{token, [] { g_queue.close(); }};
 
   while (true) {
-    bool closed = false;
-    auto item = g_queue.pop_for(IdlePumpInterval, closed);
+    auto item = g_queue.pop();
     if (!item) {
-      if (closed || token.stop_requested()) {
-        break;
-      }
-      continue;
+      break;
     }
 
+    g_progress.store((item->frameId << 8) | (static_cast<uint64_t>(item->type) + 1), std::memory_order_relaxed);
     if (item->work) {
       ZoneScopedN("QueueItem work");
       item->work();
     }
-    complete_sync(item->sync);
     g_pendingItems.fetch_sub(1, std::memory_order_acq_rel);
+    g_progress.store(0, std::memory_order_relaxed);
+    // Publish completion after retiring the item. A woken synchronizer must not
+    // observe this already-completed item as pending GPU work.
+    complete_sync(item->sync);
     if (item->type == ItemType::Shutdown) {
       break;
     }
   }
 
-  g_workerThreadId = {};
+  g_isWorkerThread = false;
 }
 
 void enqueue(QueueItem item) {
@@ -112,6 +113,17 @@ std::optional<QueueItem> BoundedQueue::pop_for(std::chrono::milliseconds timeout
   return item;
 }
 
+std::optional<QueueItem> BoundedQueue::pop() {
+  std::unique_lock lock{m_mutex};
+  m_notEmpty.wait(lock, [&] { return m_closed || !m_items.empty(); });
+  if (m_items.empty()) return std::nullopt;
+  auto item = std::move(m_items.front());
+  m_items.pop_front();
+  lock.unlock();
+  m_notFull.notify_one();
+  return item;
+}
+
 void BoundedQueue::close() {
   {
     std::lock_guard lock{m_mutex};
@@ -158,6 +170,22 @@ size_t FrameSlotPool::acquire() {
 
 std::optional<size_t> FrameSlotPool::try_acquire() {
   std::lock_guard lock{m_mutex};
+  for (size_t i = 0; i < m_freeSlots.size(); ++i) {
+    if (m_freeSlots[i]) {
+      m_freeSlots[i] = false;
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<size_t> FrameSlotPool::acquire_for(std::chrono::nanoseconds timeout) {
+  std::unique_lock lock{m_mutex};
+  if (!m_cv.wait_for(lock, timeout, [&] {
+        return std::any_of(m_freeSlots.begin(), m_freeSlots.end(), [](bool free) { return free; });
+      })) {
+    return std::nullopt;
+  }
   for (size_t i = 0; i < m_freeSlots.size(); ++i) {
     if (m_freeSlots[i]) {
       m_freeSlots[i] = false;
@@ -266,8 +294,9 @@ void synchronize() {
   sync->cv.wait(lock, [&] { return sync->complete; });
 }
 
-bool is_worker_thread() noexcept { return g_workerThreadId == std::this_thread::get_id(); }
+bool is_worker_thread() noexcept { return g_isWorkerThread; }
 
 bool is_idle() noexcept { return g_pendingItems.load(std::memory_order_acquire) == 0; }
+uint64_t progress() noexcept { return g_progress.load(std::memory_order_relaxed); }
 
 } // namespace aurora::gfx::render_worker

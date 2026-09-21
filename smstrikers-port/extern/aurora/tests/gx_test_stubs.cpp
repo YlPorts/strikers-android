@@ -123,10 +123,20 @@ void resolve_sampled_textures(const ShaderInfo& info) noexcept {}
 
 // --- Buffer push stubs ---
 namespace aurora::gfx {
-Range push_verts(const uint8_t* data, size_t length, size_t alignment) { return {}; }
-Range push_indices(const uint8_t* data, size_t length, size_t alignment) { return {}; }
+size_t g_testVertexBytes = 0, g_testIndexBytes = 0, g_testStorageBytes = 0;
+Range push_verts(const uint8_t* data, size_t length, size_t alignment) {
+  g_testVertexBytes += length;
+  return {};
+}
+Range push_indices(const uint8_t* data, size_t length, size_t alignment) {
+  g_testIndexBytes += length;
+  return {};
+}
 Range push_uniform(const uint8_t* data, size_t length) { return {}; }
-Range push_storage(const uint8_t* data, size_t length) { return {}; }
+Range push_storage(const uint8_t* data, size_t length) {
+  g_testStorageBytes += length;
+  return {};
+}
 
 Vec2<uint32_t> get_render_target_size() noexcept { return {640, 480}; }
 void set_viewport(const Viewport& viewport) noexcept {}
@@ -217,10 +227,18 @@ std::atomic<uint32_t> endOffscreenCount{0};
 std::atomic<uint32_t> resolvePassCount{0};
 std::atomic<uint32_t> offscreenWidth{0};
 std::atomic<uint32_t> offscreenHeight{0};
+uint32_t clearMask = 0;
+Vec4<float> lastClearColor{};
+float lastClearDepth = 0;
+bool hadResolveTexture = false;
 } // namespace testing
 
 void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
                        Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat) {
+  testing::clearMask = (clearColor ? 1u : 0u) | (clearAlpha ? 2u : 0u) | (clearDepth ? 4u : 0u);
+  testing::lastClearColor = clearColorValue;
+  testing::lastClearDepth = clearDepthValue;
+  testing::hadResolveTexture = !!texture;
   testing::resolvePassCount.fetch_add(1, std::memory_order_release);
 }
 void begin_offscreen(uint32_t width, uint32_t height) {
@@ -330,3 +348,7 @@ void aurora::gfx::push_debug_group(std::string) {}
 void push_debug_group(const char*) {}
 void pop_debug_group() {}
 void aurora::gfx::insert_debug_marker(std::string) {}
+
+namespace aurora::gx::texture {
+void preconvert_texture(const GXTexObj_&) noexcept {}
+}

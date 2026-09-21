@@ -453,6 +453,7 @@ void set_render_viewport(const gfx::Viewport& viewport) noexcept;
 void set_logical_scissor(const gfx::ClipRect& scissor) noexcept;
 void set_render_scissor(const gfx::ClipRect& scissor) noexcept;
 void copy_tex(const void* dest, GXBool clear) noexcept;
+void clear_efb() noexcept;
 const gfx::TextureBind& get_texture(GXTexMapID id) noexcept;
 void resolve_sampled_textures(const ShaderInfo& info) noexcept;
 
@@ -542,6 +543,7 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu:
                                     wgpu::ShaderModule shader, const char* label) noexcept;
 std::string build_shader_source(const ShaderConfig& config) noexcept;
 wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept;
+void clear_shader_cache() noexcept;
 GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept;
 
 u8 comp_type_size(GXAttr attr, GXCompType type) noexcept;

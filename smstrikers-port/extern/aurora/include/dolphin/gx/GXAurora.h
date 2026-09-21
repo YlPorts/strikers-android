@@ -79,6 +79,9 @@ extern "C" {
 
 #define GX_AURORA_END_OFFSCREEN 0x003A
 
+// Full-target clear using GX copy-clear values and write masks, without copying.
+#define GX_AURORA_CLEAR_EFB 0x003B
+
 /**
  * Draw primitives with the vertex count derived from a byte length, as written by
  * GXBegin(prim, fmt, GX_AUTO). Must be followed by a u8 draw opcode (vtxfmt|prim),
@@ -140,6 +143,11 @@ void AuroraGetRenderSize(u32* width, u32* height);
  * Flush pending GX state and wait for FIFO processing without signaling a draw-done callback.
  */
 void AuroraGXSync(void);
+
+/** Clear the entire active EFB, honoring GX color/alpha/depth write masks and
+ * GXSetCopyClear. Unlike GXCopyTex, no destination texture is produced.
+ * Call only when the copied pixels would otherwise be discarded. */
+void AuroraGXClearEFB(void);
 
 /**
  * Sets the actual render viewport in native framebuffer coordinates.

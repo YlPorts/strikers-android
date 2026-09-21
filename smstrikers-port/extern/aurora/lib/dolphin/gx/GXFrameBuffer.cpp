@@ -34,6 +34,16 @@ aurora::Vec2<uint32_t> scale_copy_dst(u32 logicalWidth, u32 logicalHeight) {
 } // namespace
 
 namespace aurora::gx {
+void clear_efb() noexcept {
+  if (!g_gxState.colorUpdate && !g_gxState.alphaUpdate && !g_gxState.depthUpdate) {
+    return;
+  }
+  // A null resolve target ends the pass and applies the same clear operations
+  // as copy_tex, but creates no texture and performs no copy/conversion pass.
+  gfx::resolve_pass_into({}, {}, g_gxState.colorUpdate, g_gxState.alphaUpdate,
+                         g_gxState.depthUpdate, g_gxState.clearColor, clear_depth_value());
+}
+
 void copy_tex(const void* dest, GXBool clear) noexcept {
   const auto rect = map_logical_scissor(g_gxState.texCopySrc);
   const auto [dstWidth, dstHeight] = scale_copy_dst(g_gxState.texCopyDstWidth, g_gxState.texCopyDstHeight);

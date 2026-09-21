@@ -37,6 +37,13 @@ void invalidate_bindings() noexcept;
 uint64_t current_bind_generation() noexcept;
 void invalidate_replacement(uint64_t replacementId) noexcept;
 void end_frame() noexcept;
+// smstrikers-port: the main thread's last FIFO drain wait, reported by AURORA_TEX_LOG.
+void note_drain_wait(uint64_t ns) noexcept;
+// smstrikers-port: queue a background conversion of this texture's current contents, once its mip count is known.
+void preconvert_texture(const GXTexObj_& obj) noexcept;
+// True once every queued pre-conversion has finished. Tests only.
+bool preconversion_idle_for_testing() noexcept;
+uint64_t preconversion_ready_bytes_for_testing() noexcept;
 void shutdown() noexcept;
 void set_content_cache_budget_for_testing(uint64_t bytes) noexcept;
 

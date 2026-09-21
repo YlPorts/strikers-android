@@ -2,6 +2,9 @@
 #include "port/aspect.h"
 #include "NL/glx/glxTexture.h"
 #include "dolphin/gx.h"
+#if defined(__ANDROID__) && defined(PORT_USE_AURORA)
+#include "dolphin/gx/GXAurora.h"
+#endif
 #include "NL/nlDebug.h"
 
 #include "dolphin/mtx.h"
@@ -157,10 +160,16 @@ void glx_ClearZBuffer()
         bool alphaUpdate = gxSetAlphaUpdate(false);
         gxSaveZMode();
         gxSetZMode(0, GX_LEQUAL, 1);
+#if defined(__ANDROID__) && defined(PORT_USE_AURORA)
+        // clearz_mem is never sampled: preserve the depth clear without
+        // converting/copying the entire screen to a discarded I8 texture.
+        AuroraGXClearEFB();
+#else
         // PORT: the frame is PortLogicalFrameWidth() wide, not 640, and the half-size destination follows it.
         GXSetTexCopySrc(0, 0, (u16)PortLogicalFrameWidth(), 0x1C0);
         GXSetTexCopyDst((u16)(PortLogicalFrameWidth() / 2), 0xE0, (_GXTexFmt)0x28, 1);
         GXCopyTex(clearz_mem, 1);
+#endif
         gxSetColourUpdate(colorUpdate);
         gxSetAlphaUpdate(alphaUpdate);
         gxRestoreZMode();
@@ -218,10 +227,14 @@ void glx_ShadowTextureGrab()
     clearColour.a = (u8)(packedClearColour);
 
     GXSetCopyClear(clearColour, 0xFFFFFF);
+#if defined(__ANDROID__) && defined(PORT_USE_AURORA)
+    AuroraGXClearEFB();
+#else
     // PORT: this is the frame clear; the frame is PortLogicalFrameWidth() wide, not 640.
     GXSetTexCopySrc(0, 0, (u16)PortLogicalFrameWidth(), 448);
     GXSetTexCopyDst((u16)(PortLogicalFrameWidth() / 2), 224, (_GXTexFmt)0x28, true);
     GXCopyTex(clearz_mem, true);
+#endif
 
     gxSetColourUpdate(colorUpdate);
     gxSetAlphaUpdate(alphaUpdate);

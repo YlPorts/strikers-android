@@ -7,6 +7,7 @@
 
 #include "Directory.hpp"
 #include "FileIO.hpp"
+#include "AndroidDocuments.hpp"
 #include "../internal.hpp"
 
 namespace {
@@ -46,6 +47,7 @@ CardGciFolder::CardGciFolder(CardGciFolder&& other) {
   m_bat = std::move(other.m_bat);
   m_folderPath = other.m_folderPath;
   m_encoding = other.m_encoding;
+  m_error = other.m_error;
 
   CardGciFolder::setCurrentGame(other.m_game);
   CardGciFolder::setCurrentMaker(other.m_maker);
@@ -56,6 +58,7 @@ CardGciFolder& CardGciFolder::operator=(CardGciFolder&& other) {
   m_bat = std::move(other.m_bat);
   m_folderPath = other.m_folderPath;
   m_encoding = other.m_encoding;
+  m_error = other.m_error;
 
   CardGciFolder::setCurrentGame(other.m_game);
   CardGciFolder::setCurrentMaker(other.m_maker);
@@ -69,12 +72,13 @@ void CardGciFolder::InitCard(const char* game, const char* maker) {
 }
 
 ECardResult CardGciFolder::openFile(const char* filename, FileHandle& handleOut) {
+  if (m_error != ECardResult::READY) return m_error;
   int idx = 0;
   for (auto& gciFile : m_files) {
     if (strcmp(filename, gciFile.file.m_filename) == 0) {
       gciFile.opened = true;
       if (gciFile.fileSize == 0)
-        gciFile.fileSize = std::filesystem::file_size(m_folderPath / gciFile.filename);
+        gciFile.fileSize = FileIO(m_folderPath / gciFile.filename).fileSize();
 
       handleOut = FileHandle(idx, 0);
       return ECardResult::READY;
@@ -87,12 +91,13 @@ ECardResult CardGciFolder::openFile(const char* filename, FileHandle& handleOut)
 }
 
 ECardResult CardGciFolder::openFile(uint32_t fileno, FileHandle& handleOut) {
+  if (m_error != ECardResult::READY) return m_error;
   if (m_files.size() > fileno) {
     auto& gciFile = m_files[fileno];
     handleOut = FileHandle(fileno, 0);
     gciFile.opened = true;
     if (gciFile.fileSize == 0)
-      gciFile.fileSize = std::filesystem::file_size(m_folderPath / gciFile.filename);
+      gciFile.fileSize = FileIO(m_folderPath / gciFile.filename).fileSize();
 
     return ECardResult::READY;
   }
@@ -102,6 +107,7 @@ ECardResult CardGciFolder::openFile(uint32_t fileno, FileHandle& handleOut) {
 }
 
 ECardResult CardGciFolder::createFile(const char* filename, size_t size, FileHandle& handleOut) {
+  if (m_error != ECardResult::READY) return m_error;
   std::string gciFilename = fmt::format("{}-{}-{}.gci", m_maker, m_game, filename);
   uint16_t neededBlocks = ROUND_UP_8192(size) / BlockSize;
   size_t fileSize = sizeof(File) + size;
@@ -148,7 +154,7 @@ void CardGciFolder::deleteFile(const FileHandle& fh) {
   if (!file)
     return;
 
-  FileIO fileIO(m_folderPath / file->filename, true);
+  FileIO fileIO(m_folderPath / file->filename);
   if (fileIO)
     fileIO.deleteFile();
 }
@@ -176,7 +182,7 @@ ECardResult CardGciFolder::deleteFile(uint32_t fileno) {
   }
 
   const auto path = m_folderPath / gciFile->filename;
-  FileIO fileIO(path, true);
+  FileIO fileIO(path);
   if (!fileIO || !fileIO.deleteFile()) {
     Log.error("Failed to delete GCI file '{}'", io::fs_path_to_string(path));
     return ECardResult::IOERROR;
@@ -207,7 +213,9 @@ ECardResult CardGciFolder::fileWrite(FileHandle& fh, const void* buf, size_t siz
         return ECardResult::READY;
       return ECardResult::IOERROR;
     }
-    return ECardResult::NOFILE;
+    // The directory already identified this file. An open failure (for example
+    // a revoked SAF write grant) is not permission to create a replacement save.
+    return ECardResult::IOERROR;
   }
 
   return ECardResult::NOCARD;
@@ -222,7 +230,7 @@ ECardResult CardGciFolder::fileRead(FileHandle& fh, void* dst, size_t size) {
         return ECardResult::READY;
       return ECardResult::IOERROR;
     }
-    return ECardResult::NOFILE;
+    return ECardResult::IOERROR;
   }
 
   return ECardResult::NOCARD;
@@ -368,23 +376,57 @@ void CardGciFolder::getEncoding(uint16_t& encoding) const { encoding = (uint16_t
 void CardGciFolder::format(ECardSlot deviceId, ECardSize size, EEncoding encoding) {
   m_encoding = encoding;
 
+#if defined(__ANDROID__)
+  const auto path = io::fs_path_to_string(m_folderPath);
+  if (documents::handles(path)) {
+    m_error = PortAndroidSaveMkdir && PortAndroidSaveMkdir(path.c_str()) ? ECardResult::READY : ECardResult::IOERROR;
+    if (m_error != ECardResult::READY) Log.error("Failed to create save folder");
+    return;
+  }
+#endif
   if (!io::create_directories(m_folderPath)) {
     Log.error("Failed to create directory {}: {}", io::fs_path_to_string(m_folderPath), SDL_GetError());
   }
 }
 
 void CardGciFolder::commit() {
+  m_error = ECardResult::READY;
   for (auto& gciFile : m_files) {
     FileIO file(m_folderPath / gciFile.filename);
 
     File tempFile = gciFile.file;
     tempFile.swapEndian();
-    file.fileWrite(&tempFile, sizeof(File), 0); // update header
+    if (!file || !file.fileWrite(&tempFile, sizeof(File), 0)) {
+      m_error = ECardResult::IOERROR;
+      return;
+    }
   }
 }
 
 bool CardGciFolder::open(const std::filesystem::path& filepath) {
   m_folderPath = filepath;
+  m_files.clear();
+#if defined(__ANDROID__)
+  const auto directory = io::fs_path_to_string(filepath);
+  if (documents::handles(directory)) {
+    m_error = ECardResult::IOERROR;
+    std::vector<std::string> names;
+    const auto collect = [](const char* name, void* data) {
+      static_cast<std::vector<std::string>*>(data)->emplace_back(name);
+    };
+    if (!PortAndroidSaveList || !PortAndroidSaveList(directory.c_str(), collect, &names)) return false;
+    for (const auto& name : names) {
+      const auto path = filepath / io::fs_path_from_string(name);
+      FileIO file(path);
+      File header;
+      if (!file || !file.fileRead(&header, sizeof(header), 0)) return false;
+      header.swapEndian();
+      m_files.push_back({header, file.fileSize(), path.filename().u8string(), false});
+    }
+    m_error = ECardResult::READY;
+    return true;
+  }
+#endif
 
   std::error_code ec;
   if (!std::filesystem::exists(filepath, ec) || !std::filesystem::is_directory(filepath, ec)) {
@@ -461,10 +503,19 @@ static std::filesystem::path g_cardFileNameEmpty = "";
 
 const std::filesystem::path& CardGciFolder::cardFilename() const { return g_cardFileNameEmpty; }
 
-ECardResult CardGciFolder::getError() const { return ECardResult::READY; }
+ECardResult CardGciFolder::getError() const { return m_error; }
 
 ProbeResults CardGciFolder::probeCardFile(const std::filesystem::path& filename) {
-  if (!std::filesystem::exists(filename) || !std::filesystem::is_directory(filename))
+#if defined(__ANDROID__)
+  const auto path = io::fs_path_to_string(filename);
+  if (documents::handles(path)) {
+    if (!PortAndroidSaveIsDirectory || !PortAndroidSaveIsDirectory(path.c_str()))
+      return {ECardResult::NOCARD, 0, 0};
+    return {ECardResult::READY, static_cast<uint32_t>(ECardSize::Card2043Mb), BlockSize};
+  }
+#endif
+  std::error_code error;
+  if (!std::filesystem::is_directory(filename, error))
     return {ECardResult::NOCARD, 0, 0};
   return {ECardResult::READY, static_cast<uint32_t>(ECardSize::Card2043Mb), BlockSize};
 }

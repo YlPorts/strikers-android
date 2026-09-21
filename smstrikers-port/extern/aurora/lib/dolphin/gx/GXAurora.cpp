@@ -51,6 +51,12 @@ void AuroraGXSync() {
   aurora::gx::fifo::drain();
 }
 
+void AuroraGXClearEFB() {
+  GXFlush();
+  GX_WRITE_AURORA(GX_AURORA_CLEAR_EFB);
+  aurora::gx::fifo::publish();
+}
+
 void GXSetViewportRender(f32 left, f32 top, f32 wd, f32 ht, f32 nearz, f32 farz) {
   GX_WRITE_AURORA(GX_AURORA_LOAD_VIEWPORT_RENDER);
   GX_WRITE_F32(left);

@@ -2,6 +2,8 @@
 
 #include "frame.hpp"
 #include "hash.hpp"
+#include "idle_cache.hpp"
+#include "runtime_metrics.hpp"
 #include "../webgpu/gpu.hpp"
 
 #include <cstddef>
@@ -38,12 +40,16 @@ struct CachedBindGroup {
   wgpu::BindGroup bindGroup;
   uint32_t lastUsedFrame = 0;
 };
+struct CachedSampler {
+  wgpu::Sampler sampler;
+  uint32_t lastUsedFrame = 0;
+};
 
 constexpr uint32_t BindGroupCacheRetainFrames = 32;
 constexpr uint32_t BindGroupCacheSweepPeriod = 16;
 
 absl::flat_hash_map<BindGroupRef, CachedBindGroup> g_cachedBindGroups;
-absl::flat_hash_map<SamplerRef, wgpu::Sampler> g_cachedSamplers;
+absl::flat_hash_map<SamplerRef, CachedSampler> g_cachedSamplers;
 std::mutex g_bindGroupCacheMutex;
 std::mutex g_samplerCacheMutex;
 
@@ -57,6 +63,13 @@ void clear_bind_group_cache() {
 }
 
 void expire_cached_bind_groups() {
+#ifdef __ANDROID__
+  if (current_frame() % 120 == 0) {
+    std::lock_guard lock{g_samplerCacheMutex};
+    trim_idle_cache(g_cachedSamplers, 256, current_frame(), 600);
+    runtime_metrics::samplerCount.store(g_cachedSamplers.size(), std::memory_order_relaxed);
+  }
+#endif
   std::lock_guard lock{g_bindGroupCacheMutex};
   const auto frameIndex = current_frame();
   if (g_cachedBindGroups.empty() || frameIndex == UINT32_MAX || frameIndex % BindGroupCacheSweepPeriod != 0) {
@@ -77,6 +90,7 @@ void shutdown_resource_cache() {
   clear_bind_group_cache();
   std::lock_guard lock{g_samplerCacheMutex};
   g_cachedSamplers.clear();
+  runtime_metrics::samplerCount.store(0, std::memory_order_relaxed);
 }
 
 } // namespace detail
@@ -109,9 +123,11 @@ wgpu::Sampler sampler_ref(const wgpu::SamplerDescriptor& descriptor) {
   std::lock_guard lock{g_samplerCacheMutex};
   auto it = g_cachedSamplers.find(id);
   if (it == g_cachedSamplers.end()) {
-    it = g_cachedSamplers.try_emplace(id, webgpu::g_device.CreateSampler(&descriptor)).first;
+    it = g_cachedSamplers.try_emplace(id, CachedSampler{.sampler = webgpu::g_device.CreateSampler(&descriptor)}).first;
+    runtime_metrics::samplerCount.store(g_cachedSamplers.size(), std::memory_order_relaxed);
   }
-  return it->second;
+  it->second.lastUsedFrame = current_frame();
+  return it->second.sampler;
 }
 
 } // namespace aurora::gfx

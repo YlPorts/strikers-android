@@ -93,7 +93,7 @@ if (AURORA_ENABLE_GX)
     ../lib/dolphin/gx
   )
 
-  target_compile_definitions(gx_fifo_tests PRIVATE AURORA TARGET_PC)
+  target_compile_definitions(gx_fifo_tests PRIVATE AURORA TARGET_PC AURORA_GX_TESTS)
 
   target_link_libraries(gx_fifo_tests PRIVATE
     gtest
@@ -113,6 +113,7 @@ if (AURORA_ENABLE_GX)
     gx_texture_cache_test.cpp
     gx_texture_cache_test_stubs.cpp
     ../lib/gx/texture.cpp
+    ../lib/thread.cpp
   )
   target_include_directories(gx_texture_cache_tests PRIVATE
     ../include
@@ -150,6 +151,7 @@ if (AURORA_ENABLE_GX)
   gtest_discover_tests(texture_replacement_streaming_tests)
 
   add_executable(render_worker_tests
+    idle_cache_test.cpp
     render_worker_test.cpp
     thread_test.cpp
     ../lib/gfx/render_worker.cpp
@@ -180,11 +182,19 @@ if (AURORA_ENABLE_GX)
   target_link_libraries(gfx_recording_tests PRIVATE
     aurora::gx
     aurora::vi
+    absl::flat_hash_map
     gtest
     gtest_main
   )
   aurora_copy_runtime_dlls(gfx_recording_tests)
   gtest_discover_tests(gfx_recording_tests)
+
+  if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(opengles_render_test opengles_render_test.cpp)
+    target_include_directories(opengles_render_test PRIVATE ../include ../lib)
+    target_compile_definitions(opengles_render_test PRIVATE AURORA TARGET_PC)
+    target_link_libraries(opengles_render_test PRIVATE aurora::gx aurora::vi absl::flat_hash_map ${CMAKE_DL_LIBS})
+  endif ()
 endif () # AURORA_ENABLE_GX
 
 # DVD API tests

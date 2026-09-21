@@ -4,6 +4,8 @@
 #include "pipeline_cache.hpp"
 #include "recording.hpp"
 #include "render_worker.hpp"
+#include "runtime_metrics.hpp"
+#include "../gx/fifo.hpp"
 #include "resource_cache.hpp"
 #include "tex_copy_conv.hpp"
 #include "tex_palette_conv.hpp"
@@ -19,6 +21,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -49,7 +53,7 @@ enum class BufferMapState {
 
 std::array<wgpu::Buffer, StagingBufferCount> g_stagingBuffers;
 std::array<std::atomic<BufferMapState>, StagingBufferCount> g_mappingStates;
-uint32_t g_frameIndex = UINT32_MAX;
+std::atomic_uint32_t g_frameIndex = UINT32_MAX;
 
 std::array<FramePacket, FrameSlotCount> g_framePackets;
 uint64_t g_nextFrameId = 1;
@@ -587,45 +591,50 @@ bool wait_for_staging_buffer(size_t slot) {
 size_t acquire_frame_slot() {
   ZoneScopedN("Acquire frame slot");
   const auto waitStart = PresentClock::now();
-  while (true) {
-    if (const auto slot = g_frameSlots.try_acquire()) {
-      const auto waitDuration = PresentClock::now() - waitStart;
-      const double waitMs = std::chrono::duration<double, std::milli>{waitDuration}.count();
-      TracyPlot("aurora: frameSlotWaitMs", waitMs);
-      return *slot;
-    }
-    wait_for_gpu_progress(std::chrono::microseconds{100});
-  }
+  // Frame slots are released by the render worker itself; this wait needs no GPU polling.
+  const size_t slot = g_frameSlots.acquire();
+  const auto waitDuration = PresentClock::now() - waitStart;
+  const double waitMs = std::chrono::duration<double, std::milli>{waitDuration}.count();
+  TracyPlot("aurora: frameSlotWaitMs", waitMs);
+  return slot;
 }
 
 std::optional<size_t> acquire_mapped_staging_buffer() {
   ZoneScopedN("Acquire mapped staging buffer");
   while (true) {
-    if (auto slot = g_stagingSlots.try_acquire()) {
+    if (auto slot = g_stagingSlots.acquire_for(std::chrono::milliseconds{1})) {
       if (wait_for_staging_buffer(*slot)) {
         return *slot;
       }
       g_stagingSlots.release(*slot);
       return std::nullopt;
     }
-    wait_for_gpu_progress(std::chrono::microseconds{100});
+    // Mapping can need event progress even when the render queue is empty.
+    if (render_worker::is_idle()) enqueue_process_events();
   }
 }
 
 bool begin_frame() {
   ZoneScoped;
   // pace_frame_start();
+  const auto slotStart = PresentClock::now();
+  runtime_metrics::framePhase.store(1, std::memory_order_relaxed);
   const size_t frameSlot = acquire_frame_slot();
+  const auto stagingStart = PresentClock::now();
+  runtime_metrics::frameSlotUs.record(duration_ns(stagingStart - slotStart) / 1000);
+  runtime_metrics::framePhase.store(2, std::memory_order_relaxed);
   const auto stagingSlot = acquire_mapped_staging_buffer();
+  runtime_metrics::stagingUs.record(duration_ns(PresentClock::now() - stagingStart) / 1000);
   if (!stagingSlot) {
     g_frameSlots.release(frameSlot);
+    runtime_metrics::framePhase.store(0, std::memory_order_relaxed);
     return false;
   }
 
   auto& frame = g_framePackets[frameSlot];
   frame = {};
   frame.frameId = g_nextFrameId++;
-  frame.frameIndex = g_frameIndex;
+  frame.frameIndex = current_frame();
   frame.stagingBuffer = *stagingSlot;
   size_t bufferOffset = 0;
   const auto& stagingBuf = g_stagingBuffers[*stagingSlot];
@@ -652,6 +661,7 @@ bool begin_frame() {
     webgpu::gpu_prof::frame_begin(g_framePackets[frameSlot].encoder);
   });
   g_cpuFrameStart = PresentClock::now();
+  runtime_metrics::framePhase.store(3, std::memory_order_relaxed);
   return true;
 }
 
@@ -659,12 +669,15 @@ void end_frame(EndFrameCallback callback) {
   ZoneScoped;
   if (g_cpuFrameStart.time_since_epoch().count() != 0) {
     const auto cpuFrameTime = PresentClock::now() - g_cpuFrameStart;
+    runtime_metrics::cpuFrameUs.record(duration_ns(cpuFrameTime) / 1000);
     update_ema(g_cpuFrameTimeNs, duration_ns(cpuFrameTime));
     const double cpuFrameTimeMs = std::chrono::duration<double, std::milli>{cpuFrameTime}.count();
     TracyPlot("aurora: cpuFrameTimeMs", cpuFrameTimeMs);
   }
   const auto recorded = end_recording();
   auto& frame = *recorded.packet;
+  runtime_metrics::drawCalls.record(frame.stats.drawCallCount);
+  runtime_metrics::uploadKiB.record((frame.stats.lastTextureUploadSize + 1023) / 1024);
   const size_t frameSlot = recorded.frameSlot;
   const uint64_t frameId = frame.frameId;
   end_pipeline_frame();
@@ -694,9 +707,10 @@ void end_frame(EndFrameCallback callback) {
     map_staging_buffer(stagingSlot, true);
     process_events();
   });
+  runtime_metrics::framePhase.store(0, std::memory_order_relaxed);
 }
 
-uint32_t current_frame() noexcept { return g_frameIndex; }
+uint32_t current_frame() noexcept { return g_frameIndex.load(std::memory_order_relaxed); }
 
 void after_submit() noexcept { depth_peek::after_submit(); }
 
@@ -705,10 +719,23 @@ void gpu_synchronize() { render_worker::synchronize(); }
 void synchronize() { render_worker::synchronize(); }
 
 void after_present() noexcept {
+#ifdef __ANDROID__
+  static bool startupReported = false;
+  if (!startupReported) {
+    startupReported = true;
+    if (!std::getenv("STRIKERS_CUSTOM_DRIVER_FAILED")) {
+      if (const char* pending = std::getenv("STRIKERS_DRIVER_PENDING")) std::remove(pending);
+    }
+  }
+#endif
   const auto now = PresentClock::now();
   const int64_t nowNs = timestamp_ns(now);
   const int64_t previousPresentNs = g_lastPresentNs.exchange(nowNs, std::memory_order_acq_rel);
   if (previousPresentNs != 0) {
+    runtime_metrics::presentGapUs.record((nowNs - previousPresentNs) / 1000);
+    if (nowNs - previousPresentNs > 25'000'000) {
+      runtime_metrics::gapsOver25ms.fetch_add(1, std::memory_order_relaxed);
+    }
     update_ema(g_presentPeriodNs, nowNs - previousPresentNs);
     const double presentPeriodMs = static_cast<double>(g_presentPeriodNs.load(std::memory_order_acquire)) / 1'000'000.0;
     TracyPlot("aurora: presentPeriodMs", presentPeriodMs);
@@ -732,7 +759,39 @@ float calculate_fps() noexcept {
   }
   return static_cast<float>(g_presentTimes.size() - 1) / elapsed;
 }
+
+void format_runtime_diagnostics(char* buffer, uint32_t capacity) {
+  if (!buffer || capacity == 0) return;
+  const int64_t lastPresent = g_lastPresentNs.load(std::memory_order_relaxed);
+  const int64_t presentAge = lastPresent ? (timestamp_ns(PresentClock::now()) - lastPresent) / 1'000'000 : -1;
+  const auto fifo = gx::fifo::runtime_progress();
+  const auto backend = runtime_metrics::activeBackend.load(std::memory_order_relaxed);
+  const char* backendName = backend == 1 ? "vulkan" : backend == 2 ? "opengles" : backend == 3 ? "other" : "starting";
+  std::snprintf(buffer, capacity,
+      "frame=%u phase=%u render=%llu present_age_ms=%lld pipelines=%u samplers=%u compiling=%llx waiting=%llx "
+      "fifo_published=%llu fifo_processed=%llu fifo_drain=%llu fifo_stage=%u "
+      "gap_max_us=%u gaps_over25ms=%u slot_max_us=%u staging_max_us=%u "
+      "cpu_frame_max_us=%u draws_max=%u upload_max_kib=%u culled_draws=%u empty_passes=%u "
+      "bindings_saved=%u backend=%s",
+      current_frame(), runtime_metrics::framePhase.load(std::memory_order_relaxed),
+      static_cast<unsigned long long>(render_worker::progress()), static_cast<long long>(presentAge),
+      runtime_metrics::pipelineCount.load(std::memory_order_relaxed),
+      runtime_metrics::samplerCount.load(std::memory_order_relaxed),
+      static_cast<unsigned long long>(runtime_metrics::compilingPipeline.load(std::memory_order_relaxed)),
+      static_cast<unsigned long long>(runtime_metrics::waitingPipeline.load(std::memory_order_relaxed)),
+      static_cast<unsigned long long>(fifo.published), static_cast<unsigned long long>(fifo.processed),
+      static_cast<unsigned long long>(fifo.drainTarget), fifo.stage,
+      runtime_metrics::presentGapUs.take(), runtime_metrics::gapsOver25ms.exchange(0, std::memory_order_relaxed),
+      runtime_metrics::frameSlotUs.take(), runtime_metrics::stagingUs.take(), runtime_metrics::cpuFrameUs.take(),
+      runtime_metrics::drawCalls.take(), runtime_metrics::uploadKiB.take(),
+      runtime_metrics::culledDraws.exchange(0, std::memory_order_relaxed),
+      runtime_metrics::emptyAttachmentPasses.exchange(0, std::memory_order_relaxed),
+      runtime_metrics::bindingsSaved.exchange(0, std::memory_order_relaxed), backendName);
+}
 } // namespace aurora::gfx
 
 const AuroraStats* aurora_get_stats() { return &aurora::gfx::detail::resources().stats; }
 float aurora_get_fps() { return aurora::gfx::calculate_fps(); }
+void aurora_format_runtime_diagnostics(char* buffer, uint32_t capacity) {
+  aurora::gfx::format_runtime_diagnostics(buffer, capacity);
+}

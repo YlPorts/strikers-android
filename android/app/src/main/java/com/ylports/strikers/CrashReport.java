@@ -24,17 +24,28 @@ import java.nio.charset.StandardCharsets;
 import java.text.DateFormat;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 final class CrashReport {
     private static final String PREF_LAST_EXIT_SHOWN = "diag_last_exit_shown";
     private static final String PREF_LAST_LOG_MTIME_SHOWN = "diag_last_log_mtime_shown";
-    private static final int MAX_LOG_BYTES = 48 * 1024;
+    private static final ExecutorService READER = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "Strikers report reader");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private CrashReport() {
     }
 
+    static void showLatest(Activity activity) {
+        if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+        readAndShow(activity, false);
+    }
+
     static void scheduleCheck(Activity activity) {
-        if (activity == null || Build.VERSION.SDK_INT < 30) {
+        if (activity == null) {
             return;
         }
         Handler handler = new Handler(Looper.getMainLooper());
@@ -43,42 +54,53 @@ final class CrashReport {
     }
 
     private static void showIfNeeded(Activity activity) {
+        readAndShow(activity, true);
+    }
+
+    private static void readAndShow(Activity activity, boolean onlyIfNew) {
         if (activity == null || activity.isFinishing() || activity.isDestroyed()) {
             return;
         }
 
-        SharedPreferences prefs = activity.getSharedPreferences(MainActivity.PREFS, Context.MODE_PRIVATE);
-        long lastExitShown = prefs.getLong(PREF_LAST_EXIT_SHOWN, 0L);
-        long lastLogMtimeShown = prefs.getLong(PREF_LAST_LOG_MTIME_SHOWN, 0L);
+        // Old native maps dumps can be large. Filter them away from the UI thread.
+        READER.execute(() -> {
 
-        ApplicationExitInfo latest = findLatestGameExit(activity);
-        File logFile = RunLog.file(activity);
-        long logMtime = logFile.exists() ? logFile.lastModified() : 0L;
-        String log = readTail(logFile, MAX_LOG_BYTES);
-        boolean logContainsNativeCrash = log.contains("STRIKERS NATIVE CRASH")
-                || log.contains("early native load crash")
-                || log.contains("JAVA CRASH");
+            SharedPreferences prefs = activity.getSharedPreferences(MainActivity.PREFS, Context.MODE_PRIVATE);
+            long lastExitShown = prefs.getLong(PREF_LAST_EXIT_SHOWN, 0L);
+            long lastLogMtimeShown = prefs.getLong(PREF_LAST_LOG_MTIME_SHOWN, 0L);
 
-        boolean newSystemCrash = latest != null
-                && latest.getTimestamp() > lastExitShown
-                && isInterestingExit(latest.getReason());
-        boolean newLogCrash = logContainsNativeCrash && logMtime > lastLogMtimeShown;
+            ApplicationExitInfo latest = findLatestGameExit(activity);
+            File logFile = RunLog.file(activity);
+            long logMtime = logFile.exists() ? logFile.lastModified() : 0L;
+            String log = DiagnosticLog.read(logFile);
+            boolean logContainsNativeCrash = log.contains("STRIKERS NATIVE CRASH")
+                    || log.contains("early native load crash")
+                    || log.contains("JAVA CRASH");
 
-        if (!newSystemCrash && !newLogCrash) {
-            return;
-        }
+            boolean newSystemCrash = latest != null
+                    && latest.getTimestamp() > lastExitShown
+                    && isInterestingExit(latest.getReason());
+            boolean newLogCrash = logContainsNativeCrash && logMtime > lastLogMtimeShown;
 
-        long exitTimestamp = latest != null ? latest.getTimestamp() : 0L;
-        String report = buildReport(latest, log);
-        prefs.edit()
-                .putLong(PREF_LAST_EXIT_SHOWN, Math.max(lastExitShown, exitTimestamp))
-                .putLong(PREF_LAST_LOG_MTIME_SHOWN, Math.max(lastLogMtimeShown, logMtime))
-                .apply();
+            if (onlyIfNew && !newSystemCrash && !newLogCrash) {
+                return;
+            }
 
-        showDialog(activity, report);
+            long exitTimestamp = latest != null ? latest.getTimestamp() : 0L;
+            String report = buildReport(activity, latest, log);
+            prefs.edit()
+                    .putLong(PREF_LAST_EXIT_SHOWN, Math.max(lastExitShown, exitTimestamp))
+                    .putLong(PREF_LAST_LOG_MTIME_SHOWN, Math.max(lastLogMtimeShown, logMtime))
+                    .apply();
+
+            activity.runOnUiThread(() -> {
+                if (!activity.isFinishing() && !activity.isDestroyed()) showDialog(activity, report);
+            });
+        });
     }
 
     private static ApplicationExitInfo findLatestGameExit(Context context) {
+        if (Build.VERSION.SDK_INT < 30) return null;
         ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
         if (manager == null) {
             return null;
@@ -111,10 +133,18 @@ final class CrashReport {
                 || reason == ApplicationExitInfo.REASON_LOW_MEMORY;
     }
 
-    private static String buildReport(ApplicationExitInfo exit, String log) {
+    private static String buildReport(Context context, ApplicationExitInfo exit, String log) {
         StringBuilder out = new StringBuilder(32768);
-        out.append("STRIKERS ANDROID - INFORME DE CIERRE\n");
+        out.append("STRIKERS ANDROID - INFORME DE DIAGNOSTICO\n");
         out.append("Copia este informe completo y envialo en el chat.\n\n");
+        try {
+            out.append("version del informe: ").append(context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0).versionName).append('\n');
+        } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
+        }
+        out.append("dispositivo: ").append(Build.MANUFACTURER).append(' ')
+                .append(Build.MODEL).append(" Android ").append(Build.VERSION.RELEASE)
+                .append(" (API ").append(Build.VERSION.SDK_INT).append(")\n\n");
 
         if (exit != null) {
             out.append("=== Android ApplicationExitInfo ===\n");
@@ -133,6 +163,8 @@ final class CrashReport {
                 out.append("diagnostico: proceso terminado por una senal del sistema; mira status/signal.\n");
             } else if (exit.getReason() == ApplicationExitInfo.REASON_LOW_MEMORY) {
                 out.append("diagnostico: Android termino el proceso por presion de memoria.\n");
+            } else if (exit.getReason() == ApplicationExitInfo.REASON_USER_REQUESTED) {
+                out.append("diagnostico: retirada de recientes/cierre manual; no explica una detencion anterior.\n");
             }
             out.append('\n');
         } else {
@@ -140,7 +172,7 @@ final class CrashReport {
             out.append("Aun no disponible; usando el registro nativo persistente.\n\n");
         }
 
-        out.append("=== last-run.log (cola) ===\n");
+        out.append("=== last-run.log (fallo y contexto; mapas ajenos omitidos) ===\n");
         if (log == null || log.isEmpty()) {
             out.append("(vacio)\n");
         } else {
@@ -149,7 +181,9 @@ final class CrashReport {
                 out.append('\n');
             }
         }
-        out.append("=== fin del informe ===\n");
+        out.append("=== session-performance.log (cola) ===\n");
+        out.append(readTail(SessionDiagnostics.file(context), 12 * 1024));
+        out.append("\n=== fin del informe ===\n");
         return out.toString();
     }
 
@@ -213,7 +247,7 @@ final class CrashReport {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
         AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setTitle("El juego se cerro - informe de diagnostico")
+                .setTitle("Informe de diagnóstico")
                 .setView(scroll)
                 .setPositiveButton("Copiar informe", (d, which) -> {
                     ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);

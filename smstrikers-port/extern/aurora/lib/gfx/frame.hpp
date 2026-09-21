@@ -8,7 +8,15 @@
 namespace aurora::gfx::detail {
 
 inline constexpr size_t FrameSlotCount = 2;
+#ifdef __ANDROID__
+// Each staging slot costs 55 MiB in Strikers. Keep the two frame slots plus
+// one for GPU remapping instead of five buffers (165 rather than 275 MiB).
+// acquire_mapped_staging_buffer waits for MapAsync before recycling any slot;
+// reducing the count does not shrink per-frame capacity or reuse in-flight data.
+inline constexpr size_t StagingBufferCount = FrameSlotCount + 1;
+#else
 inline constexpr size_t StagingBufferCount = FrameSlotCount + 3;
+#endif
 inline constexpr uint64_t StagingBufferSize = UniformBufferSize + VertexBufferSize + IndexBufferSize +
                                               StorageBufferSize + (UseTextureBuffer ? TextureUploadSize : 0);
 

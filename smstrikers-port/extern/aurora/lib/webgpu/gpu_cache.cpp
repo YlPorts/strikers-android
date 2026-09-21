@@ -1,4 +1,5 @@
 #include <cstring>
+#include <cstdlib>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -36,6 +37,14 @@ constexpr int CACHE_SCHEMA = 2;
 constexpr uint64_t VacuumPrunePercentThreshold = 25;
 
 static std::filesystem::path cache_path() {
+#ifdef __ANDROID__
+  const char* id = std::getenv("STRIKERS_DRIVER_ID");
+  // Keep stock cache and each installed driver separate; saves never use this path.
+  if (id && std::strlen(id) == 36 && std::strspn(id, "0123456789abcdef-") == 36 &&
+      !std::getenv("STRIKERS_CUSTOM_DRIVER_FAILED")) {
+    return io::fs_path_from_string(g_config.cachePath) / (std::string("dawn_cache-") + id + ".db");
+  }
+#endif
   return io::fs_path_from_string(g_config.cachePath) / "dawn_cache.db";
 }
 

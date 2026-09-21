@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 project(strikers_android_app LANGUAGES C CXX)
 
+add_subdirectory(drivers)
+
 # Small library loaded before libstrikers.so. It owns no game code; its only job is to
 # capture a fatal signal that happens while the dynamic loader is running C/C++ constructors.
 add_library(strikers_diag SHARED

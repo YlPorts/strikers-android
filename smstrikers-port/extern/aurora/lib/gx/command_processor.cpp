@@ -2,6 +2,7 @@
 
 #include "../gfx/depth_peek.hpp"
 #include "../gfx/recording.hpp"
+#include "../gfx/runtime_metrics.hpp"
 #include "../internal.hpp"
 #include "fifo.hpp" // smstrikers-port: display list provenance
 #include "dolphin/gd/GDGeometry.h"
@@ -68,61 +69,69 @@ private:
   size_t mPos = 0;
 };
 
-u16 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxCount) noexcept {
-  u16 numIndices = 0;
+u32 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxCount) noexcept {
+  u32 numIndices = 0;
+  // smstrikers-port: filled in place, since ByteBuffer::append costs a resize check and a memcpy per index.
   if (prim == GX_QUADS) {
-    buf.reserve_extra((vtxCount / 4) * 6 * sizeof(u16));
-
-    for (u16 v = 0; v < vtxCount; v += 4) {
-      u16 idx0 = vtxStart + v;
-      u16 idx1 = vtxStart + v + 1;
-      u16 idx2 = vtxStart + v + 2;
-      u16 idx3 = vtxStart + v + 3;
-
-      buf.append(idx0);
-      buf.append(idx1);
-      buf.append(idx2);
-      numIndices += 3;
-
-      buf.append(idx2);
-      buf.append(idx3);
-      buf.append(idx0);
-      numIndices += 3;
+    const u32 quads = vtxCount / 4;
+    numIndices = quads * 6;
+    u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
+    for (u32 q = 0; q < quads; ++q) {
+      const u16 idx0 = static_cast<u16>(vtxStart + q * 4);
+      out[0] = idx0;
+      out[1] = static_cast<u16>(idx0 + 1);
+      out[2] = static_cast<u16>(idx0 + 2);
+      out[3] = static_cast<u16>(idx0 + 2);
+      out[4] = static_cast<u16>(idx0 + 3);
+      out[5] = idx0;
+      out += 6;
     }
   } else if (prim == GX_TRIANGLES) {
-    buf.reserve_extra(vtxCount * sizeof(u16));
+    numIndices = vtxCount;
+    u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
     for (u16 v = 0; v < vtxCount; ++v) {
-      const u16 idx = vtxStart + v;
-      buf.append(idx);
-      ++numIndices;
+      out[v] = static_cast<u16>(vtxStart + v);
     }
   } else if (prim == GX_TRIANGLEFAN) {
-    buf.reserve_extra(((u32(vtxCount) - 3) * 3 + 3) * sizeof(u16));
-    for (u16 v = 0; v < vtxCount; ++v) {
-      const u16 idx = vtxStart + v;
-      if (v < 3) {
-        buf.append(idx);
-        ++numIndices;
-        continue;
+    if (vtxCount < 3) {
+      numIndices = vtxCount;
+      u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
+      for (u16 v = 0; v < vtxCount; ++v) {
+        out[v] = static_cast<u16>(vtxStart + v);
       }
-      buf.append(std::array{vtxStart, static_cast<u16>(idx - 1), idx});
-      numIndices += 3;
+    } else {
+      numIndices = (u32(vtxCount) - 2) * 3;
+      u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
+      for (u16 v = 2; v < vtxCount; ++v) {
+        const u16 idx = static_cast<u16>(vtxStart + v);
+        out[0] = vtxStart;
+        out[1] = static_cast<u16>(idx - 1);
+        out[2] = idx;
+        out += 3;
+      }
     }
   } else if (prim == GX_TRIANGLESTRIP) {
-    buf.reserve_extra(((static_cast<u32>(vtxCount) - 3) * 3 + 3) * sizeof(u16));
-    for (u16 v = 0; v < vtxCount; ++v) {
-      const u16 idx = vtxStart + v;
-      if (v < 3) {
-        buf.append(idx);
-        ++numIndices;
-        continue;
+    if (vtxCount < 3) {
+      numIndices = vtxCount;
+      u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
+      for (u16 v = 0; v < vtxCount; ++v) {
+        out[v] = static_cast<u16>(vtxStart + v);
       }
-      if ((v & 1) == 0) {
-        buf.append(std::array{static_cast<u16>(idx - 2), static_cast<u16>(idx - 1), idx});
-      } else {
-        buf.append(std::array{static_cast<u16>(idx - 1), static_cast<u16>(idx - 2), idx});
+    } else {
+      numIndices = (u32(vtxCount) - 2) * 3;
+      u16* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
+      for (u16 v = 2; v < vtxCount; ++v) {
+        const u16 idx = static_cast<u16>(vtxStart + v);
+        if ((v & 1) == 0) {
+          out[0] = static_cast<u16>(idx - 2);
+          out[1] = static_cast<u16>(idx - 1);
+        } else {
+          out[0] = static_cast<u16>(idx - 1);
+          out[1] = static_cast<u16>(idx - 2);
+        }
+        out[2] = idx;
+        out += 3;
       }
-      numIndices += 3;
     }
   } else if (prim == GX_LINES || prim == GX_LINESTRIP || prim == GX_POINTS) {
     buf.reserve_extra(6 * sizeof(u16));
@@ -794,6 +803,16 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, Reader& read
   if (totalVtxBytes > reader.remaining())
     UNLIKELY { handle_draw_overrun(totalVtxBytes, reader); }
 
+  // Consume the complete FIFO payload, but do not upload/resolve/compile a
+  // polygon that GX explicitly culls on both faces. State changes remain dirty
+  // for the next visible draw. GX face culling does not apply to lines or points.
+  if (g_gxState.cullMode == GX_CULL_ALL &&
+      (prim == GX_TRIANGLES || prim == GX_QUADS || prim == GX_TRIANGLESTRIP || prim == GX_TRIANGLEFAN)) {
+    reader.skip(totalVtxBytes);
+    gfx::runtime_metrics::culledDraws.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+
   const bool cleanState = g_gxState.dirty == 0 && fmt == sDrawCache.lastDrawFmt && sDrawCache.lineMode == 0 &&
                           prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS;
   auto* lastDraw = cleanState ? gfx::get_last_draw_command<DrawData>() : nullptr;
@@ -994,6 +1013,8 @@ void handle_aurora(Reader& reader) noexcept {
     gfx::begin_offscreen(width, height);
   } else if (subCmd == GX_AURORA_END_OFFSCREEN) {
     gfx::end_offscreen();
+  } else if (subCmd == GX_AURORA_CLEAR_EFB) {
+    clear_efb();
   } else if (subCmd == GX_AURORA_DESTROY_TEXOBJ) {
     evict_texture_object(reader.read<u32>());
   } else if (subCmd == GX_AURORA_DESTROY_TLUT) {
@@ -1030,7 +1051,6 @@ void handle_aurora(Reader& reader) noexcept {
     const size_t idxBytes = static_cast<size_t>(indexCount) * sizeof(u16);
     // Index data is always host-endian; push it to the GPU buffer as-is
     const auto indexData = reader.take(idxBytes);
-    const gfx::Range idxRange = gfx::push_indices(indexData.data(), indexData.size(), 4);
     u32 vtxSize;
     if (g_gxState.lastVtxFmt == fmt) {
       vtxSize = g_gxState.lastVtxSize;
@@ -1039,6 +1059,11 @@ void handle_aurora(Reader& reader) noexcept {
     }
     const u32 totalVtxBytes = vtxCount * vtxSize;
     const auto vertexData = reader.take(totalVtxBytes);
+    if (prim == GX_TRIANGLES && g_gxState.cullMode == GX_CULL_ALL) {
+      gfx::runtime_metrics::culledDraws.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    const gfx::Range idxRange = gfx::push_indices(indexData.data(), indexData.size(), 4);
     diag_check_indices(vertexData.data(), vtxCount, fmt, vtxSize);   // smstrikers-port
     const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
     if (indexCount != 0) {
@@ -1066,4 +1091,9 @@ void clear_draw_cache() noexcept {
   sDrawCache.hasFogRange = false;
 }
 
+#ifdef AURORA_GX_TESTS
+u32 prepare_indices_for_testing(ByteBuffer& buffer, GXPrimitive primitive, u16 count) noexcept {
+  return prepare_idx_buffer(buffer, primitive, 0, count);
+}
+#endif
 } // namespace aurora::gx::fifo

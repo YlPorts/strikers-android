@@ -1,18 +1,24 @@
 package com.ylports.strikers;
 
 import android.app.AlertDialog;
+import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Insets;
+import android.os.Build;
 import android.util.SparseIntArray;
+import android.view.DisplayCutout;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
@@ -64,9 +70,15 @@ final class TouchControllerView extends View {
             "none", "stick", "cstick", "dpad", "a", "b", "x", "y", "l", "r", "z", "start"
     };
 
-    private final StrikersActivity activity;
+    interface StateSink {
+        void send(int buttons, int stickX, int stickY, int substickX, int substickY,
+                  int triggerLeft, int triggerRight);
+    }
+
+    private final Activity activity;
+    private final StateSink stateSink;
     private final SharedPreferences prefs;
-    private final float density;
+    private float density;
     private final SparseIntArray pointerRoles = new SparseIntArray();
     private final float[] posX = new float[ROLE_COUNT];
     private final float[] posY = new float[ROLE_COUNT];
@@ -75,6 +87,11 @@ final class TouchControllerView extends View {
     private final Paint outline = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint banner = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint.FontMetrics fontMetrics = new Paint.FontMetrics();
+
+    private int insetLeft, insetTop, insetRight, insetBottom;
+    private boolean settingsControlVisible = true;
+    private AlertDialog settingsDialog;
 
     private float controlScale = DEFAULT_SCALE;
     private float opacity = DEFAULT_OPACITY;
@@ -111,9 +128,27 @@ final class TouchControllerView extends View {
     private boolean stateSent;
 
     TouchControllerView(StrikersActivity context) {
+        this(context, StrikersActivity::nativeSetTouchState);
+    }
+
+    TouchControllerView(Activity context, StateSink sink) {
         super(context);
         activity = context;
-        prefs = context.getSharedPreferences(MainActivity.PREFS, Context.MODE_PRIVATE);
+        stateSink = sink;
+        // The launcher and game live in different processes. Do not let a stale
+        // launcher preferences cache overwrite the player's touch layout.
+        prefs = context.getSharedPreferences("strikers_touch", Context.MODE_PRIVATE);
+        if (!prefs.getBoolean("migrated", false)) {
+            SharedPreferences legacy = context.getSharedPreferences(MainActivity.PREFS, Context.MODE_PRIVATE);
+            SharedPreferences.Editor editor = prefs.edit();
+            for (java.util.Map.Entry<String, ?> entry : legacy.getAll().entrySet()) {
+                if (!entry.getKey().startsWith("touch_")) continue;
+                Object value = entry.getValue();
+                if (value instanceof Float) editor.putFloat(entry.getKey(), (Float) value);
+                if (value instanceof Boolean) editor.putBoolean(entry.getKey(), (Boolean) value);
+            }
+            editor.putBoolean("migrated", true).apply();
+        }
         density = getResources().getDisplayMetrics().density;
 
         setFocusable(false);
@@ -132,6 +167,7 @@ final class TouchControllerView extends View {
     }
 
     void reloadPreferences() {
+        density = getResources().getDisplayMetrics().density;
         controlScale = clamp(prefs.getFloat(PREF_TOUCH_SCALE, DEFAULT_SCALE), 0.65f, 1.40f);
         opacity = clamp(prefs.getFloat(PREF_TOUCH_OPACITY, DEFAULT_OPACITY), 0.15f, 0.85f);
         advancedControls = prefs.getBoolean(PREF_TOUCH_ADVANCED, false);
@@ -151,7 +187,79 @@ final class TouchControllerView extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
+        releaseAll();
         recalculateSizes();
+    }
+
+    @Override
+    public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+        applySafeInsets(insets);
+        return insets;
+    }
+
+    @SuppressWarnings("deprecation")
+    void applySafeInsets(WindowInsets insets) {
+        int left, top, right, bottom;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Insets safe = insets.getInsets(WindowInsets.Type.systemBars()
+                    | WindowInsets.Type.displayCutout() | WindowInsets.Type.mandatorySystemGestures());
+            left = safe.left; top = safe.top; right = safe.right; bottom = safe.bottom;
+        } else {
+            left = insets.getSystemWindowInsetLeft();
+            top = insets.getSystemWindowInsetTop();
+            right = insets.getSystemWindowInsetRight();
+            bottom = insets.getSystemWindowInsetBottom();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                DisplayCutout cutout = insets.getDisplayCutout();
+                if (cutout != null) {
+                    left = Math.max(left, cutout.getSafeInsetLeft());
+                    top = Math.max(top, cutout.getSafeInsetTop());
+                    right = Math.max(right, cutout.getSafeInsetRight());
+                    bottom = Math.max(bottom, cutout.getSafeInsetBottom());
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Insets gestures = insets.getMandatorySystemGestureInsets();
+                left = Math.max(left, gestures.left); top = Math.max(top, gestures.top);
+                right = Math.max(right, gestures.right); bottom = Math.max(bottom, gestures.bottom);
+            }
+        }
+        if (left == insetLeft && top == insetTop && right == insetRight && bottom == insetBottom) return;
+        insetLeft = left; insetTop = top; insetRight = right; insetBottom = bottom;
+        releaseAll();
+        recalculateSizes();
+        postInvalidateOnAnimation();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        if (!hasWindowFocus) releaseAll();
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        dispose();
+        super.onDetachedFromWindow();
+    }
+
+    void dispose() {
+        releaseAll();
+        if (editMode) finishEditing();
+        if (settingsDialog != null) settingsDialog.dismiss();
+    }
+
+    boolean isSettingsControlVisible() {
+        return settingsControlVisible || editMode;
+    }
+
+    void setSettingsControlVisible(boolean visible) {
+        // Never hide the editor's OK button or shrink its hit area to zero.
+        if (!visible && (editMode || settingsDialog != null)) return;
+        if (settingsControlVisible != visible) {
+            settingsControlVisible = visible;
+            postInvalidateOnAnimation();
+        }
     }
 
     private void recalculateSizes() {
@@ -160,7 +268,7 @@ final class TouchControllerView extends View {
         if (w <= 0 || h <= 0) {
             return;
         }
-        float shortSide = Math.min(w, h);
+        float shortSide = Math.max(1, Math.min(w - insetLeft - insetRight, h - insetTop - insetBottom));
         faceRadius = clamp(shortSide * 0.052f * controlScale, dp(28), dp(48));
         smallRadius = faceRadius * 0.74f;
         shoulderRadius = faceRadius * 0.67f;
@@ -170,8 +278,8 @@ final class TouchControllerView extends View {
         cStickRadius = faceRadius * 0.66f;
         dpadStep = faceRadius * 0.92f;
         settingsRadius = clamp(shortSide * 0.031f, dp(19), dp(27));
-        settingsCx = settingsRadius + dp(10);
-        settingsCy = settingsRadius + dp(9);
+        settingsCx = clampCenter(settingsRadius + dp(10), insetLeft, w - insetRight, settingsRadius);
+        settingsCy = clampCenter(settingsRadius + dp(9), insetTop, h - insetBottom, settingsRadius);
     }
 
     @Override
@@ -306,6 +414,7 @@ final class TouchControllerView extends View {
     }
 
     private void drawSettingsButton(Canvas canvas) {
+        if (!isSettingsControlVisible()) return;
         fill.setColor(colorWithOpacity(0xFF1D2630, editMode ? 0.75f : 0.22f));
         canvas.drawCircle(settingsCx, settingsCy, settingsRadius, fill);
         outline.setColor(colorWithOpacity(0xFFFFFFFF, editMode ? 0.80f : 0.32f));
@@ -338,8 +447,8 @@ final class TouchControllerView extends View {
     private void drawText(Canvas canvas, String label, float x, float y, float size, float alpha) {
         text.setTextSize(Math.max(dp(10), size));
         text.setColor(colorWithOpacity(Color.WHITE, alpha));
-        Paint.FontMetrics fm = text.getFontMetrics();
-        float baseline = y - (fm.ascent + fm.descent) * 0.5f;
+        text.getFontMetrics(fontMetrics);
+        float baseline = y - (fontMetrics.ascent + fontMetrics.descent) * 0.5f;
         canvas.drawText(label, x, baseline, text);
     }
 
@@ -360,11 +469,16 @@ final class TouchControllerView extends View {
             return handleEditorTouch(event);
         }
 
+        if (settingsDialog != null) return true;
+
+        if (action == MotionEvent.ACTION_DOWN) releaseAll();
+
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             int index = event.getActionIndex();
             float px = event.getX(index);
             float py = event.getY(index);
-            if (insideCircle(px, py, settingsCx, settingsCy, settingsRadius * 1.45f)) {
+            if (isSettingsControlVisible()
+                    && insideCircle(px, py, settingsCx, settingsCy, settingsRadius * 1.45f)) {
                 releaseAll();
                 showTouchSettings();
                 return true;
@@ -648,6 +762,8 @@ final class TouchControllerView extends View {
 
     void releaseAll() {
         pointerRoles.clear();
+        editPointerId = -1;
+        editRole = ROLE_NONE;
         mainStickActive = false;
         mainStickPointerId = -1;
         setState(0, 0, 0, 0, 0, 0, 0, true);
@@ -682,7 +798,7 @@ final class TouchControllerView extends View {
         triggerRight = newTriggerRight;
 
         if (changed || !stateSent) {
-            StrikersActivity.nativeSetTouchState(buttons, stickX, stickY,
+            stateSink.send(buttons, stickX, stickY,
                     substickX, substickY, triggerLeft, triggerRight);
             stateSent = true;
         }
@@ -690,6 +806,7 @@ final class TouchControllerView extends View {
     }
 
     private void showTouchSettings() {
+        if (settingsDialog != null || activity.isFinishing() || activity.isDestroyed()) return;
         final LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
         int pad = Math.round(dp(20));
@@ -731,9 +848,11 @@ final class TouchControllerView extends View {
         reset.setAllCaps(false);
         root.addView(reset);
 
+        ScrollView scroll = new ScrollView(activity);
+        scroll.addView(root);
         final AlertDialog dialog = new AlertDialog.Builder(activity)
                 .setTitle("Controles táctiles")
-                .setView(root)
+                .setView(scroll)
                 .setPositiveButton("Listo", null)
                 .create();
 
@@ -768,6 +887,7 @@ final class TouchControllerView extends View {
             savePreferences();
             releaseAll();
             editMode = true;
+            settingsControlVisible = true;
             editPointerId = -1;
             editRole = ROLE_NONE;
             dialog.dismiss();
@@ -783,7 +903,12 @@ final class TouchControllerView extends View {
             advanced.setChecked(advancedControls);
             postInvalidateOnAnimation();
         });
-        dialog.setOnDismissListener(v -> savePreferences());
+        dialog.setOnDismissListener(v -> {
+            settingsDialog = null;
+            savePreferences();
+            releaseAll();
+        });
+        settingsDialog = dialog;
         dialog.show();
     }
 
@@ -808,10 +933,9 @@ final class TouchControllerView extends View {
         if (getWidth() <= 0 || getHeight() <= 0) {
             return;
         }
-        float edgeX = Math.max(dp(16), editHitRadius(role) * 0.66f);
-        float edgeY = Math.max(dp(16), editHitRadius(role) * 0.66f);
-        px = clamp(px, edgeX, getWidth() - edgeX);
-        py = clamp(py, edgeY, getHeight() - edgeY);
+        float radius = visibleRadius(role) + dp(4);
+        px = clampCenter(px, insetLeft, getWidth() - insetRight, radius);
+        py = clampCenter(py, insetTop, getHeight() - insetBottom, radius);
         posX[role] = px / getWidth();
         posY[role] = py / getHeight();
         postInvalidateOnAnimation();
@@ -894,11 +1018,30 @@ final class TouchControllerView extends View {
     }
 
     private float xForRole(int role) {
-        return posX[role] * getWidth();
+        return clampCenter(posX[role] * getWidth(), insetLeft,
+                getWidth() - insetRight, visibleRadius(role) + dp(4));
     }
 
     private float yForRole(int role) {
-        return posY[role] * getHeight();
+        return clampCenter(posY[role] * getHeight(), insetTop,
+                getHeight() - insetBottom, visibleRadius(role) + dp(4));
+    }
+
+    private float visibleRadius(int role) {
+        switch (role) {
+            case ROLE_MAIN_STICK: return stickKnobRadius;
+            case ROLE_C_STICK: return cStickRadius * 1.78f;
+            case ROLE_DPAD: return dpadStep * 1.42f;
+            case ROLE_A: return faceRadius;
+            case ROLE_B: case ROLE_X: case ROLE_Y: return smallRadius;
+            case ROLE_L: case ROLE_R: case ROLE_Z: return shoulderRadius;
+            default: return startRadius;
+        }
+    }
+
+    private static float clampCenter(float center, float start, float end, float radius) {
+        float margin = Math.min(radius, Math.max(0, (end - start) * 0.5f));
+        return clamp(center, start + margin, end - margin);
     }
 
     private static String positionKey(int role, String axis) {
@@ -921,6 +1064,7 @@ final class TouchControllerView extends View {
     }
 
     private static float clamp(float value, float min, float max) {
+        if (Float.isNaN(value)) return (min + max) * 0.5f;
         return Math.max(min, Math.min(max, value));
     }
 

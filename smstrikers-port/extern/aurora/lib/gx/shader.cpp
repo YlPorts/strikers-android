@@ -10,6 +10,7 @@
 #include <dolphin/gx/GXEnum.h>
 
 #include <absl/container/flat_hash_set.h>
+#include <list>
 #include <mutex>
 #include <string_view>
 #include <utility>
@@ -23,6 +24,18 @@ using namespace std::string_view_literals;
 
 namespace {
 constexpr Module Log{"aurora::gfx::gx"};
+
+// Blend/depth variants share the same shader. Keep a bounded LRU so building
+// those variants does not regenerate WGSL or recreate its module each time.
+// The compiler normally has one worker; the mutex also covers synchronous use.
+struct CachedShader {
+  HashType hash;
+  ShaderConfig config;
+  wgpu::ShaderModule module;
+};
+constexpr size_t ShaderCacheCapacity = 128;
+std::list<CachedShader> sShaderCache;
+std::mutex sShaderCacheMutex;
 
 std::string_view chan_comp(GXTevColorChan chan) noexcept {
   switch (chan) {
@@ -2025,8 +2038,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {{{6}{5}
 
 wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
   ZoneScoped;
-  const auto shaderSource = build_shader_source(config);
   const auto hash = xxh3_hash(config);
+  std::lock_guard lock{sShaderCacheMutex};
+  for (auto it = sShaderCache.begin(); it != sShaderCache.end(); ++it) {
+    if (it->hash == hash && it->config == config) {
+      sShaderCache.splice(sShaderCache.begin(), sShaderCache, it);
+      return sShaderCache.front().module;
+    }
+  }
+  const auto shaderSource = build_shader_source(config);
   wgpu::ShaderSourceWGSL wgslDescriptor{};
   wgslDescriptor.code = shaderSource.c_str();
   const auto label = fmt::format("GX Shader {:x}", hash);
@@ -2034,6 +2054,16 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
       .nextInChain = &wgslDescriptor,
       .label = label.c_str(),
   };
-  return webgpu::g_device.CreateShaderModule(&shaderDescriptor);
+  auto module = webgpu::g_device.CreateShaderModule(&shaderDescriptor);
+  if (module) {
+    sShaderCache.push_front({hash, config, module});
+    if (sShaderCache.size() > ShaderCacheCapacity) sShaderCache.pop_back();
+  }
+  return module;
+}
+
+void clear_shader_cache() noexcept {
+  std::lock_guard lock{sShaderCacheMutex};
+  sShaderCache.clear();
 }
 } // namespace aurora::gx

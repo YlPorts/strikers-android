@@ -19,6 +19,33 @@ env:
   CMAKE_VERSION: '3.31.1'
 
 jobs:
+  render-regressions:
+    name: texture and renderer regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install headless OpenGL ES test runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1-mesa-dri
+      - name: Configure renderer tests
+        run: >-
+          cmake -S smstrikers-port/extern/aurora -B /tmp/strikers-render-tests
+          -DCMAKE_BUILD_TYPE=Debug -DAURORA_ENABLE_DVD=OFF -DAURORA_ENABLE_CARD=OFF
+          -DAURORA_DAWN_PROVIDER=package -DAURORA_SDL3_PROVIDER=vendor
+          -DSDL_UNIX_CONSOLE_BUILD=ON -DSDL_X11=OFF -DSDL_WAYLAND=OFF
+      - name: Build affected test targets
+        run: cmake --build /tmp/strikers-render-tests --target gx_texture_cache_tests render_worker_tests gx_fifo_tests gfx_recording_tests opengles_render_test --parallel 2
+      - name: Run texture ownership, bounded memory, waits and primitive regressions
+        run: |
+          /tmp/strikers-render-tests/tests/gx_texture_cache_tests
+          /tmp/strikers-render-tests/tests/render_worker_tests
+          /tmp/strikers-render-tests/tests/gx_fifo_tests
+          /tmp/strikers-render-tests/tests/gfx_recording_tests
+      - name: Validate real GLES shaders, alpha blending and readback
+        run: timeout -k 5 60 /tmp/strikers-render-tests/tests/opengles_render_test
+
   app-shell:
     name: full native APK
     runs-on: ubuntu-24.04
@@ -26,49 +53,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Patch random dialogue bounds
-        shell: bash
-        run: python3 cmake/android/patch_character_audio_random_dialogue.py
-
-      - name: Instrument NIS trigger callbacks
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('smstrikers-port/src/Game/Render/Nis.cpp')
-          source = path.read_text()
-          needle = "                mTriggers[i].Fire(*this);"
-          replacement = (
-              "                OSReport(\"[nistrig] BEGIN nis=%s i=%d type=%d frame=%.1f norm=%.4f old=%.4f new=%.4f name=%s target=%s p1=%lu p2=%lu p3=%lu p4=%lu f1=%.3f\\\\n\",\n"
-              "                         mHeader != NULL ? mHeader->name : \"(unknown)\",\n"
-              "                         i,\n"
-              "                         (int)mTriggers[i].type,\n"
-              "                         (double)mTriggers[i].frameNumber,\n"
-              "                         (double)triggerFrame,\n"
-              "                         (double)oldTime,\n"
-              "                         (double)newTime,\n"
-              "                         mTriggers[i].name != NULL ? mTriggers[i].name : \"(null)\",\n"
-              "                         mTriggers[i].target != NULL ? mTriggers[i].target : \"(null)\",\n"
-              "                         (unsigned long)mTriggers[i].params.param1,\n"
-              "                         (unsigned long)mTriggers[i].params.param2,\n"
-              "                         (unsigned long)mTriggers[i].params.param3,\n"
-              "                         (unsigned long)mTriggers[i].params.param4,\n"
-              "                         (double)mTriggers[i].params.float1);\n"
-              "                mTriggers[i].Fire(*this);\n"
-              "                OSReport(\"[nistrig] END nis=%s i=%d type=%d frame=%.1f name=%s target=%s\\\\n\",\n"
-              "                         mHeader != NULL ? mHeader->name : \"(unknown)\",\n"
-              "                         i,\n"
-              "                         (int)mTriggers[i].type,\n"
-              "                         (double)mTriggers[i].frameNumber,\n"
-              "                         mTriggers[i].name != NULL ? mTriggers[i].name : \"(null)\",\n"
-              "                         mTriggers[i].target != NULL ? mTriggers[i].target : \"(null)\");"
-          )
-          if source.count(needle) != 1:
-              raise SystemExit(f'Expected one UpdateTriggers Fire call, found {source.count(needle)}')
-          path.write_text(source.replace(needle, replacement, 1))
-          PY
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -96,6 +80,58 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
+      - name: Android regression tests
+        shell: bash
+        run: |
+          set -o pipefail
+          g++ -std=c++17 -Wall -Wextra -Werror -pthread -fsanitize=undefined android/tests/touch_state_test.cpp -o /tmp/touch-state-test
+          /tmp/touch-state-test
+          cc -std=c11 -D_POSIX_C_SOURCE=200809L -D__ANDROID__ -Wall -Wextra -Werror -fsanitize=undefined \
+            -Ismstrikers-port/include android/tests/frame_pacing_test.c smstrikers-port/src/platform/vi.c \
+            -o /tmp/frame-pacing-test
+          /tmp/frame-pacing-test
+          /tmp/frame-pacing-test 120
+          cc -std=c11 -D_POSIX_C_SOURCE=200809L -D__ANDROID__ -DPORT_USE_AURORA -fsanitize=undefined \
+            -Ismstrikers-port/include -c smstrikers-port/src/platform/vi.c -o /tmp/vi-swap.o
+          g++ -std=c++11 -D__ANDROID__ -DTARGET_PC=1 '-D__declspec(x)=' -fshort-wchar -fsigned-char \
+            -fno-strict-aliasing -ffunction-sections -fdata-sections -fsanitize=undefined \
+            -include smstrikers-port/include/port/prelude.h -Ismstrikers-port/include \
+            -Ismstrikers-port/include/msl -Ismstrikers-port/src android/tests/frame_swap_test.cpp \
+            /tmp/vi-swap.o -Wl,--gc-sections -o /tmp/frame-swap-test
+          /tmp/frame-swap-test 60
+          /tmp/frame-swap-test 120
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread -fsanitize=undefined \
+            -Ismstrikers-port/extern/aurora/lib android/tests/frame_metrics_test.cpp -o /tmp/frame-metrics-test
+          /tmp/frame-metrics-test
+          g++ -std=c++20 -D__ANDROID__ -Wall -Wextra -Werror -fsanitize=undefined android/tests/save_documents_test.cpp -o /tmp/save-documents-test
+          /tmp/save-documents-test
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread -fsanitize=undefined android/tests/pipeline_wait_test.cpp -o /tmp/pipeline-wait-test
+          /tmp/pipeline-wait-test
+          g++ -std=c++17 -Wall -Wextra -Werror -pthread -fsanitize=undefined android/tests/crash_capture_test.cpp -o /tmp/crash-capture-test
+          /tmp/crash-capture-test
+          g++ -std=c++11 -DSTRIKERS_DIAGNOSTICS_TEST -Wall -Wextra -Werror -pthread -fsanitize=undefined \
+            -Ismstrikers-port/include android/tests/runtime_diagnostics_test.cpp smstrikers-port/src/platform/runtime_diagnostics.cpp \
+            -o /tmp/runtime-diagnostics-test
+          /tmp/runtime-diagnostics-test
+          cmake -S android/tests/texture_bundle -B /tmp/strikers-texture-bundle-test -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/strikers-texture-bundle-test --parallel 2
+          ctest --test-dir /tmp/strikers-texture-bundle-test --output-on-failure
+          cmake -S android/tests/card -B /tmp/strikers-card-test -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/strikers-card-test --parallel 2
+          ctest --test-dir /tmp/strikers-card-test --output-on-failure
+          gradle --no-daemon -p android :app:testReleaseUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
+
+      - name: Preserve control test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: strikers-android-control-tests
+          path: |
+            android-unit-tests.log
+            android/app/build/reports/tests/
+            android/app/build/test-results/
+          if-no-files-found: ignore
+
       - name: Build release-optimised APK
         shell: bash
         run: |
@@ -103,16 +139,29 @@ jobs:
           gradle --no-daemon -p android :app:assembleRelease --stacktrace 2>&1 | tee android-apk-build.log
 
       - name: Collect unstripped native libraries
-        if: always()
         shell: bash
         run: |
-          set -eu
-          mkdir -p android-native-debug
-          STRIKERS_SO="$(find android/app/.cxx -type f -path '*/arm64-v8a/*' -name 'libstrikers.so' -print -quit 2>/dev/null || true)"
-          SDL_SO="$(find android/app/.cxx -type f -path '*/arm64-v8a/*' -name 'libSDL3.so' -print -quit 2>/dev/null || true)"
-          if [ -n "$STRIKERS_SO" ]; then cp "$STRIKERS_SO" android-native-debug/libstrikers.so; fi
-          if [ -n "$SDL_SO" ]; then cp "$SDL_SO" android-native-debug/libSDL3.so; fi
-          ls -lh android-native-debug || true
+          python3 - <<'PY'
+          import hashlib, json, shutil, subprocess
+          from pathlib import Path
+          output = Path('android-native-debug')
+          output.mkdir(exist_ok=True)
+          # AGP puts linked objects in intermediates/cxx; .cxx alone is the
+          # configure directory and silently produced empty artifacts before.
+          roots = [Path('android/app/build/intermediates/cxx'), Path('android/app/.cxx')]
+          manifest = {'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'libraries': []}
+          for name in ['libstrikers.so', 'libSDL3.so', 'libstrikers_diag.so']:
+              candidates = sorted(p for root in roots for p in root.rglob(name) if 'arm64-v8a' in p.parts)
+              source = next((p for p in candidates if '.symtab' in subprocess.check_output(['readelf', '-S', str(p)], text=True)), None)
+              if source is None:
+                  raise SystemExit('Missing unstripped ARM64 symbols for ' + name)
+              shutil.copy2(source, output / name)
+              notes = subprocess.check_output(['readelf', '-n', str(source)], text=True)
+              build_id = next(line.strip() for line in notes.splitlines() if 'Build ID:' in line)
+              manifest['libraries'].append({'name': name, 'build_id': build_id, 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()})
+          (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print(json.dumps(manifest, indent=2))
+          PY
 
       - name: Upload unstripped native libraries
         if: always()
@@ -120,7 +169,7 @@ jobs:
         with:
           name: strikers-android-unstripped-native
           path: android-native-debug/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
       - name: Preserve APK build log
         if: always()
@@ -144,10 +193,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Patch random dialogue bounds
-        shell: bash
-        run: python3 cmake/android/patch_character_audio_random_dialogue.py
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3

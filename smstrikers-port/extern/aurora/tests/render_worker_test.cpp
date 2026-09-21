@@ -20,6 +20,21 @@ protected:
   void TearDown() override { aurora::gfx::render_worker::shutdown(); }
 };
 
+TEST(RenderWorkerFrameSlots, TimedWaitDoesNotConsumeBusySlotAndWakesOnRelease) {
+  FrameSlotPool slots{1};
+  const size_t busy = slots.acquire();
+  EXPECT_FALSE(slots.acquire_for(1ms).has_value());
+  auto waiter = std::async(std::launch::async, [&] { return slots.acquire_for(2s); });
+  slots.release(busy);
+  ASSERT_EQ(waiter.wait_for(1s), std::future_status::ready);
+  const auto ready = waiter.get();
+  ASSERT_TRUE(ready.has_value());
+  EXPECT_EQ(*ready, busy);
+  EXPECT_EQ(slots.free_count(), 0);
+  slots.release(*ready);
+  EXPECT_TRUE(slots.acquire_for(0ms).has_value());
+}
+
 TEST(RenderWorkerQueue, PreservesOrdering) {
   BoundedQueue queue{4};
   ASSERT_TRUE(queue.push(QueueItem{.type = ItemType::BeginFrame, .frameId = 1}));
@@ -58,6 +73,41 @@ TEST(RenderWorkerQueue, PushBlocksWhenFull) {
   ASSERT_TRUE(queue.pop_for(0ms, closed).has_value());
   future.wait();
   EXPECT_TRUE(pushed.load(std::memory_order_acquire));
+}
+
+TEST(RenderWorkerQueue, SleepingConsumerWakesForWorkAndClose) {
+  BoundedQueue queue{1};
+  auto consumer = std::async(std::launch::async, [&] { return queue.pop(); });
+  EXPECT_EQ(consumer.wait_for(10ms), std::future_status::timeout);
+  ASSERT_TRUE(queue.push(QueueItem{.frameId = 42}));
+  if (consumer.wait_for(1s) != std::future_status::ready) queue.close();
+  const auto item = consumer.get();
+  ASSERT_TRUE(item.has_value());
+  EXPECT_EQ(item->frameId, 42);
+  auto closed = std::async(std::launch::async, [&] { return queue.pop(); });
+  queue.close();
+  EXPECT_FALSE(closed.get().has_value());
+}
+
+TEST_F(RenderWorkerTest, ReentrantWorkAndRepeatedShutdownPreserveOrder) {
+  namespace worker = aurora::gfx::render_worker;
+  EXPECT_FALSE(worker::is_worker_thread());
+  std::atomic_int count{0};
+  for (int session = 0; session < 25; ++session) {
+    worker::initialize();
+    for (uint64_t frame = 1; frame <= 100; ++frame) {
+      worker::enqueue_begin_frame(frame, [&] {
+        EXPECT_TRUE(worker::is_worker_thread());
+        worker::enqueue_work([&] { ++count; });
+        worker::synchronize();
+      });
+    }
+    worker::synchronize();
+    EXPECT_EQ(worker::progress(), 0);
+    worker::shutdown();
+    EXPECT_FALSE(worker::is_worker_thread());
+  }
+  EXPECT_EQ(count.load(), 2500);
 }
 
 TEST_F(RenderWorkerTest, SyncWaitsForPriorWork) {

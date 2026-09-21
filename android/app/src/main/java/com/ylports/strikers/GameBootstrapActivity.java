@@ -32,6 +32,9 @@ public final class GameBootstrapActivity extends Activity {
     public static final String EXTRA_GAME_URI = "com.ylports.strikers.GAME_URI";
     public static final String EXTRA_LANGUAGE = "com.ylports.strikers.LANGUAGE";
     public static final String EXTRA_RENDER_ROWS = "com.ylports.strikers.RENDER_ROWS";
+    public static final String EXTRA_AUTO_HIDE_TOUCH = "com.ylports.strikers.AUTO_HIDE_TOUCH";
+    public static final String EXTRA_TARGET_FPS = "com.ylports.strikers.TARGET_FPS";
+    public static final String EXTRA_SAVE_FOLDER = "com.ylports.strikers.SAVE_FOLDER";
     public static final String LAST_RUN_LOG = RunLog.FILE_NAME;
 
     // Keep the descriptor alive for the lifetime of the :game process. libstrikers.so duplicates
@@ -41,6 +44,7 @@ public final class GameBootstrapActivity extends Activity {
     private static native void nativeInstallCrashDiagnostics(String logPath);
     private static native String nativeValidateDiscPath(String nativePath);
     private static native void nativeBeginRunLog(String logPath);
+    private static native void nativeSetSaveFolder(SaveFolder folder);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,27 +52,9 @@ public final class GameBootstrapActivity extends Activity {
         RunLog.append(this, "bootstrap: onCreate before Activity.onCreate");
         super.onCreate(savedInstanceState);
         RunLog.append(this, "bootstrap: Activity.onCreate complete");
-        showPreparing("Preparando Super Mario Strikers…");
 
         Thread loader = new Thread(this::prepareAndLaunch, "strikers-native-loader");
         loader.start();
-    }
-
-    private void showPreparing(String message) {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            runOnUiThread(() -> showPreparing(message));
-            return;
-        }
-
-        RunLog.append(this, "bootstrap UI: " + message);
-        TextView text = new TextView(this);
-        text.setText(message);
-        text.setTextColor(Color.WHITE);
-        text.setTextSize(18f);
-        text.setGravity(Gravity.CENTER);
-        text.setBackgroundColor(Color.rgb(8, 10, 14));
-        text.setPadding(dp(24), dp(24), dp(24), dp(24));
-        setContentView(text);
     }
 
     private void prepareAndLaunch() {
@@ -135,14 +121,25 @@ public final class GameBootstrapActivity extends Activity {
             Os.setenv("STRIKERS_RES_SCALE",
                     String.format(Locale.US, "%.6f", renderScale), true);
 
-            // Keep the mobile defaults lightweight. These are already the PC defaults,
-            // but exporting them here prevents a stray packaged config from turning on
-            // expensive 4x MSAA on a phone.
-            Os.setenv("STRIKERS_MSAA", "1", true);
+            String graphics = GraphicsSettings.applyEnvironment(getIntent(), prefs);
+            DriverRuntime.prepare(this, getIntent().getStringExtra(DriverRuntime.EXTRA_DRIVER),
+                    GraphicsSettings.launchBackend(getIntent(), prefs));
+            // Speculative copies/conversion can compete with a draw's mandatory
+            // conversion and retain unused data. RAM size alone did not establish
+            // a benefit on phones; use the normal content cache on every device.
+            Os.setenv("AURORA_TEX_PRECONVERT", "0", true);
+            RunLog.append(this, "graphics: texture preparation=on demand; CPU affinity=Android scheduler");
+            // A fast panel does not automatically double rendering workload.
+            // Keep 120 available by choice; the simulation retains its own clock.
+            int requestedFps = getIntent().getIntExtra(EXTRA_TARGET_FPS,
+                    prefs.getInt(MainActivity.PREF_TARGET_FPS, 60));
+            int targetFps = requestedFps == 120 ? 120 : 60;
+            Os.setenv("STRIKERS_FPS_LIMIT", Integer.toString(targetFps), true);
 
             RunLog.append(this, "bootstrap: settings language=" + language
                     + " render=" + renderRows + "p (" + resolutionMode + ", scale="
-                    + String.format(Locale.US, "%.3f", renderScale) + "x) msaa=1");
+                    + String.format(Locale.US, "%.3f", renderScale) + "x) fps_limit="
+                    + targetFps + " " + graphics);
             RunLog.append(this, "bootstrap: native environment and early crash log exported before library load");
 
             try {
@@ -157,7 +154,6 @@ public final class GameBootstrapActivity extends Activity {
                 return;
             }
 
-            showPreparing("Cargando SDL3…");
             try {
                 RunLog.append(this, "bootstrap: System.loadLibrary(SDL3) begin");
                 System.loadLibrary("SDL3");
@@ -169,7 +165,6 @@ public final class GameBootstrapActivity extends Activity {
                 return;
             }
 
-            showPreparing("Cargando núcleo de Super Mario Strikers…");
             try {
                 RunLog.append(this, "bootstrap: System.loadLibrary(strikers) begin");
                 System.loadLibrary("strikers");
@@ -181,7 +176,21 @@ public final class GameBootstrapActivity extends Activity {
                 return;
             }
 
-            showPreparing("Verificando imagen de Super Mario Strikers…");
+            String saveUri = getIntent().getStringExtra(EXTRA_SAVE_FOLDER);
+            try {
+                SaveFolder folder = saveUri == null ? null : new SaveFolder(getApplicationContext(), Uri.parse(saveUri));
+                if (folder != null) {
+                    folder.validate();
+                    folder.prepareDirectories();
+                }
+                nativeSetSaveFolder(folder);
+            } catch (Exception e) {
+                RunLog.append(this, "bootstrap: save folder unavailable: " + e);
+                closeGameImageFd();
+                showError("No se pudo acceder a la carpeta de partidas. Vuelve al inicio y selecciona la carpeta de nuevo.\n\n" + safeMessage(e));
+                return;
+            }
+
             RunLog.append(this, "bootstrap: validating disc through SAF fd bridge");
             String validationError = nativeValidateDiscPath(nativePath);
             if (validationError != null && !validationError.isEmpty()) {
@@ -191,6 +200,7 @@ public final class GameBootstrapActivity extends Activity {
                 return;
             }
             RunLog.append(this, "bootstrap: disc validation OK");
+            DriverRuntime.armStartupGuard(this);
 
             RunLog.append(this, "bootstrap: attaching native stderr to durable log");
             nativeBeginRunLog(runLog.getAbsolutePath());
@@ -198,7 +208,14 @@ public final class GameBootstrapActivity extends Activity {
 
             Intent nativeGame = new Intent();
             nativeGame.setClassName(getPackageName(), getPackageName() + ".StrikersActivity");
+            nativeGame.putExtra(EXTRA_AUTO_HIDE_TOUCH,
+                    getIntent().getBooleanExtra(EXTRA_AUTO_HIDE_TOUCH, false));
+            nativeGame.putExtra(EXTRA_TARGET_FPS, targetFps);
+            nativeGame.putExtra(GraphicsSettings.STATS, getIntent().getBooleanExtra(GraphicsSettings.STATS, false));
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
                 try {
                     RunLog.append(this, "bootstrap: starting StrikersActivity");
                     startActivity(nativeGame);
@@ -227,6 +244,7 @@ public final class GameBootstrapActivity extends Activity {
             runOnUiThread(() -> showError(message));
             return;
         }
+        if (isFinishing() || isDestroyed()) return;
 
         RunLog.append(this, "bootstrap: showing error screen");
         LinearLayout root = new LinearLayout(this);
@@ -251,21 +269,16 @@ public final class GameBootstrapActivity extends Activity {
         root.addView(details);
 
         Button chooseAnother = new Button(this);
-        chooseAnother.setText("Elegir otra ROM");
+        chooseAnother.setText("Volver al inicio");
         chooseAnother.setAllCaps(false);
-        chooseAnother.setOnClickListener(v -> forgetSavedGameAndReturnToLauncher());
+        chooseAnother.setOnClickListener(v -> returnToLauncher());
         root.addView(chooseAnother);
 
         setContentView(root);
     }
 
-    private void forgetSavedGameAndReturnToLauncher() {
+    private void returnToLauncher() {
         closeGameImageFd();
-        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE)
-                .edit()
-                .remove(MainActivity.PREF_GAME_URI)
-                .apply();
-
         Intent launcher = new Intent();
         launcher.setClassName(getPackageName(), getPackageName() + ".MainActivity");
         launcher.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);

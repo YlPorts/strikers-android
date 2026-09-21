@@ -2,6 +2,7 @@
 #include "NL/nlMemory.h"
 #include "NL/nlTicker.h"
 #include "NL/nlDLRing.h"
+#include "port/runtime_diagnostics.h"
 
 #define assert(condition) ((condition) ? ((void)0) : ((void)0))
 
@@ -47,7 +48,9 @@ void nlTaskManager::RunAllTasks()
         {
             for (;;)
             {
+                PortDiagnosticTask(currentTask->nPriority, true, m_pInstance->m_CurrState, m_pInstance->m_PendingState);
                 currentTask->StateTransition(m_pInstance->m_CurrState, m_pInstance->m_PendingState);
+                PortDiagnosticTaskDone();
                 if (nlDLRingIsEnd<nlTask>(m_pInstance->m_lTaskList, currentTask) != 0)
                     break;
                 currentTask = currentTask->m_next;
@@ -75,7 +78,9 @@ void nlTaskManager::RunAllTasks()
                 }
                 deltaTime = clampedDeltaTime * m_pInstance->m_TimeDilation;
                 m_pInstance->m_fCurrentTimeDelta = deltaTime;
+                PortDiagnosticTask(taskIterator->nPriority, false, m_pInstance->m_CurrState, m_pInstance->m_PendingState);
                 taskIterator->Run(deltaTime);
+                PortDiagnosticTaskDone();
             }
             if (taskIterator == m_pInstance->m_lTaskList)
                 break;
