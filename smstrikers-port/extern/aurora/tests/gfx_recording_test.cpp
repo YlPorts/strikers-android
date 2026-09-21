@@ -2,6 +2,7 @@
 
 #include "gfx/frame_packet.hpp"
 #include "gfx/recording.hpp"
+#include "gfx/resources.hpp"
 #include "gfx/texture.hpp"
 #include "webgpu/gpu.hpp"
 
@@ -17,6 +18,9 @@ constexpr auto DepthFormat = wgpu::TextureFormat::Depth24Plus;
 class GfxRecordingTest : public ::testing::Test {
 protected:
   void SetUp() override {
+    // No GPU is created in these recorder tests. Dawn's default limit is the
+    // undefined sentinel, not a usable alignment for successive uniforms.
+    detail::resources().limits.minUniformBufferOffsetAlignment = 256;
     webgpu::g_graphicsConfig.surfaceConfiguration.format = ColorFormat;
     webgpu::g_graphicsConfig.depthFormat = DepthFormat;
     webgpu::g_graphicsConfig.msaaSamples = 1;
@@ -106,6 +110,104 @@ TEST_F(GfxRecordingTest, EfbPassUsesDiscoveredSceneLayout) {
   EXPECT_EQ(targetLayout.key, discovered.key);
   EXPECT_EQ(targetLayout.colorAttachmentCount, discovered.colorAttachmentCount);
   EXPECT_EQ(targetLayout.colorAttachments[SceneColorAttachmentIndex].semantic, ColorAttachmentSemantic::SceneColor);
+}
+
+TEST_F(GfxRecordingTest, ConsecutiveShadowCopiesKeepEveryTargetWithoutEmptyAttachmentPasses) {
+  std::array<TextureHandle, 10> targets;
+  for (size_t i = 0; i < targets.size(); ++i) {
+    targets[i] = std::make_shared<TextureRef>(wgpu::Texture{}, wgpu::TextureView{}, wgpu::TextureView{},
+                                            wgpu::Extent3D{80, 74, 1}, ColorFormat, 1, GX_CTF_A8);
+    resolve_pass_into(targets[i], {static_cast<int32_t>((i % 4) * 160),
+                                  static_cast<int32_t>((i / 4) * 148), 160, 148},
+                      false, false, false, {}, 1.f, GX_CTF_A8);
+  }
+  finish();
+  ASSERT_EQ(frame.renderPasses.size(), 11u);
+  ASSERT_EQ(frame.ops.size(), 11u);
+  size_t attachmentPasses = 0;
+  for (size_t i = 0; i < frame.renderPasses.size(); ++i) {
+    const auto& pass = frame.renderPasses[i];
+    EXPECT_TRUE(pass.sealed);
+    EXPECT_FALSE(pass.discardable);
+    EXPECT_EQ(frame.ops[i].renderPass, &pass);
+    attachmentPasses += pass.needs_attachment_pass();
+    if (i < targets.size()) {
+      EXPECT_EQ(pass.resolveTarget, targets[i]);
+      EXPECT_EQ(pass.resolveFormat, GX_CTF_A8);
+      EXPECT_EQ(pass.resolveRect.x, static_cast<int32_t>((i % 4) * 160));
+      EXPECT_EQ(pass.resolveRect.y, static_cast<int32_t>((i / 4) * 148));
+      EXPECT_EQ(pass.resolveRect.width, 160);
+      EXPECT_EQ(pass.resolveRect.height, 148);
+    }
+  }
+  // The initial clear remains. Ten subsequent load/store-only passes need no
+  // raster work, while all ten shadow conversions and the final snapshot remain.
+  EXPECT_EQ(attachmentPasses, 1u);
+  EXPECT_TRUE(frame.renderPasses.back().captureDepthSnapshot);
+}
+
+TEST_F(GfxRecordingTest, DepthAndColorClearsSurviveEmptyCopyContinuations) {
+  copy_current_offscreen();
+  EXPECT_FALSE(frame.renderPasses.back().needs_attachment_pass());
+  resolve_pass_into({}, {}, false, false, true, {}, 0.25f);
+  EXPECT_TRUE(frame.renderPasses.back().needs_attachment_pass());
+  EXPECT_EQ(frame.renderPasses.back().clearDepthValue, 0.25f);
+  copy_current_offscreen();
+  EXPECT_FALSE(frame.renderPasses.back().needs_attachment_pass());
+  resolve_pass_into({}, {}, true, true, false, {0.2f, 0.4f, 0.6f, 1.f}, 1.f);
+  EXPECT_TRUE(frame.renderPasses.back().needs_attachment_pass());
+  EXPECT_EQ(frame.renderPasses.back().colorAttachments[0].clearValue.w(), 1.f);
+}
+
+TEST_F(GfxRecordingTest, AttachmentSideEffectsAreNeverSkipped) {
+  copy_current_offscreen();
+  const auto loadOnly = frame.renderPasses.back();
+  ASSERT_FALSE(loadOnly.needs_attachment_pass());
+  {
+    auto pass = loadOnly;
+    pass.hasDraws = true; // Includes masked clears and registered custom draws.
+    EXPECT_TRUE(pass.needs_attachment_pass());
+  }
+  {
+    auto pass = loadOnly;
+    pass.msaaSamples = 4;
+    EXPECT_TRUE(pass.needs_attachment_pass());
+  }
+  {
+    auto pass = loadOnly;
+    pass.colorAttachments[0].loadOp = wgpu::LoadOp::ExpandResolveTexture;
+    EXPECT_TRUE(pass.needs_attachment_pass());
+  }
+  for (const bool depth : {false, true}) {
+    auto pass = loadOnly;
+    if (depth) pass.depthLoadOp = wgpu::LoadOp::Clear;
+    else pass.colorAttachments[0].loadOp = wgpu::LoadOp::Clear;
+    EXPECT_TRUE(pass.needs_attachment_pass());
+    pass = loadOnly;
+    if (depth) pass.depthStoreOp = wgpu::StoreOp::Discard;
+    else pass.colorAttachments[0].storeOp = wgpu::StoreOp::Discard;
+    EXPECT_TRUE(pass.needs_attachment_pass());
+  }
+  {
+    auto pass = loadOnly;
+    pass.hasStencil = true;
+    pass.stencilLoadOp = wgpu::LoadOp::Clear;
+    EXPECT_TRUE(pass.needs_attachment_pass());
+    pass.stencilLoadOp = wgpu::LoadOp::Load;
+    pass.stencilStoreOp = wgpu::StoreOp::Discard;
+    EXPECT_TRUE(pass.needs_attachment_pass());
+    pass.stencilStoreOp = wgpu::StoreOp::Store;
+    EXPECT_FALSE(pass.needs_attachment_pass());
+  }
+  {
+    auto pass = loadOnly;
+    pass.colorAttachments[0].clear = true;
+    pass.clearDepth = true;
+    pass.colorAttachments[0].loadOp = wgpu::LoadOp::Load;
+    pass.depthLoadOp = wgpu::LoadOp::Load;
+    // Explicit load operations override the default clear flags, as in the encoder.
+    EXPECT_FALSE(pass.needs_attachment_pass());
+  }
 }
 
 TEST_F(GfxRecordingTest, CopiedOffscreenPassIsRetainedOnRestore) {

@@ -2,6 +2,7 @@
 
 #include "../gfx/depth_peek.hpp"
 #include "../gfx/recording.hpp"
+#include "../gfx/runtime_metrics.hpp"
 #include "../internal.hpp"
 #include "fifo.hpp" // smstrikers-port: display list provenance
 #include "dolphin/gd/GDGeometry.h"
@@ -802,6 +803,16 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, Reader& read
   if (totalVtxBytes > reader.remaining())
     UNLIKELY { handle_draw_overrun(totalVtxBytes, reader); }
 
+  // Consume the complete FIFO payload, but do not upload/resolve/compile a
+  // polygon that GX explicitly culls on both faces. State changes remain dirty
+  // for the next visible draw. GX face culling does not apply to lines or points.
+  if (g_gxState.cullMode == GX_CULL_ALL &&
+      (prim == GX_TRIANGLES || prim == GX_QUADS || prim == GX_TRIANGLESTRIP || prim == GX_TRIANGLEFAN)) {
+    reader.skip(totalVtxBytes);
+    gfx::runtime_metrics::culledDraws.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+
   const bool cleanState = g_gxState.dirty == 0 && fmt == sDrawCache.lastDrawFmt && sDrawCache.lineMode == 0 &&
                           prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS;
   auto* lastDraw = cleanState ? gfx::get_last_draw_command<DrawData>() : nullptr;
@@ -1040,7 +1051,6 @@ void handle_aurora(Reader& reader) noexcept {
     const size_t idxBytes = static_cast<size_t>(indexCount) * sizeof(u16);
     // Index data is always host-endian; push it to the GPU buffer as-is
     const auto indexData = reader.take(idxBytes);
-    const gfx::Range idxRange = gfx::push_indices(indexData.data(), indexData.size(), 4);
     u32 vtxSize;
     if (g_gxState.lastVtxFmt == fmt) {
       vtxSize = g_gxState.lastVtxSize;
@@ -1049,6 +1059,11 @@ void handle_aurora(Reader& reader) noexcept {
     }
     const u32 totalVtxBytes = vtxCount * vtxSize;
     const auto vertexData = reader.take(totalVtxBytes);
+    if (prim == GX_TRIANGLES && g_gxState.cullMode == GX_CULL_ALL) {
+      gfx::runtime_metrics::culledDraws.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    const gfx::Range idxRange = gfx::push_indices(indexData.data(), indexData.size(), 4);
     diag_check_indices(vertexData.data(), vtxCount, fmt, vtxSize);   // smstrikers-port
     const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
     if (indexCount != 0) {

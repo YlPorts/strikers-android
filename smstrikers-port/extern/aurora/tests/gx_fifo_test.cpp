@@ -6,6 +6,7 @@
 
 #include "gx_test_common.hpp"
 #include "__gx.h"
+#include "gfx/runtime_metrics.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -40,6 +41,7 @@ TEST(GxPrimitiveIndices, ShortPrimitivesDoNotUnderflowAllocation) {
 namespace aurora::gfx {
 extern uint32_t g_testDrawCount;
 extern std::atomic<uint32_t> g_testProcessedDrawCount;
+extern size_t g_testVertexBytes, g_testIndexBytes, g_testStorageBytes;
 namespace testing {
 extern std::atomic<uint32_t> beginOffscreenCount;
 extern std::atomic<uint32_t> endOffscreenCount;
@@ -109,6 +111,100 @@ static bool has_aurora_cmd(const std::vector<u8>& bytes, u16 cmd) {
 static u32 read_fifo_u32(const std::vector<u8>& bytes, size_t offset) {
   return (static_cast<u32>(bytes[offset]) << 24) | (static_cast<u32>(bytes[offset + 1]) << 16) |
          (static_cast<u32>(bytes[offset + 2]) << 8) | static_cast<u32>(bytes[offset + 3]);
+}
+
+TEST_F(GXFifoTest, CulledPolygonsConsumePayloadWithoutGpuUploads) {
+  using namespace aurora::gfx;
+  g_testDrawCount = 0;
+  g_testVertexBytes = g_testIndexBytes = g_testStorageBytes = 0;
+  runtime_metrics::culledDraws.store(0);
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_U8, 0);
+  GXSetCullMode(GX_CULL_ALL);
+  for (const auto prim : {GX_TRIANGLES, GX_QUADS, GX_TRIANGLESTRIP, GX_TRIANGLEFAN}) {
+    const u16 count = prim == GX_TRIANGLES ? 3 : 4;
+    GXBegin(prim, GX_VTXFMT0, count);
+    for (u16 i = 0; i < count; ++i) {
+      // Bytes resembling opcodes must remain vertex data, not change GX state.
+      GXPosition3u8(0x61, 0x41, static_cast<u8>(i));
+    }
+    GXEnd();
+  }
+  GXSetAlphaUpdate(GX_FALSE);
+  const auto bytes = flush_and_capture();
+  reset_gx_state();
+  decode_fifo(bytes);
+  EXPECT_EQ(g_testDrawCount, 0u);
+  EXPECT_EQ(g_testVertexBytes, 0u);
+  EXPECT_EQ(g_testIndexBytes, 0u);
+  EXPECT_EQ(g_testStorageBytes, 0u);
+  EXPECT_EQ(runtime_metrics::culledDraws.load(), 4u);
+  EXPECT_EQ(g_gxState.cullMode, GX_CULL_ALL);
+  EXPECT_FALSE(g_gxState.alphaUpdate);
+  EXPECT_NE(g_gxState.dirty, 0u);
+}
+
+TEST_F(GXFifoTest, CullAllKeepsLinesPointsAndFollowingVisibleTriangles) {
+  using namespace aurora::gfx;
+  g_testDrawCount = 0;
+  g_testVertexBytes = g_testIndexBytes = g_testStorageBytes = 0;
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_U8, 0);
+  GXSetCullMode(GX_CULL_ALL);
+  for (const auto prim : {GX_TRIANGLES, GX_LINES, GX_LINESTRIP, GX_POINTS}) {
+    GXBegin(prim, GX_VTXFMT0, 3);
+    for (u16 i = 0; i < 3; ++i) GXPosition3u8(i, i, i);
+    GXEnd();
+  }
+  GXSetCullMode(GX_CULL_BACK);
+  GXBegin(GX_TRIANGLES, GX_VTXFMT0, 3);
+  for (u16 i = 0; i < 3; ++i) GXPosition3u8(i, i, i);
+  GXEnd();
+  const auto bytes = flush_and_capture();
+  reset_gx_state();
+  decode_fifo(bytes);
+  EXPECT_EQ(g_testDrawCount, 4u);
+  EXPECT_EQ(g_testVertexBytes, 4u * 9u);
+  EXPECT_EQ(g_gxState.cullMode, GX_CULL_BACK);
+}
+
+TEST_F(GXFifoTest, CulledOptimizedDisplayListConsumesIndicesAndVertices) {
+  using namespace aurora::gfx;
+  g_testDrawCount = 0;
+  g_testVertexBytes = g_testIndexBytes = g_testStorageBytes = 0;
+  runtime_metrics::culledDraws.store(0);
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_U8, 0);
+  for (const auto mode : {GX_CULL_ALL, GX_CULL_BACK}) {
+    GXSetCullMode(mode);
+    __GXSetDirtyState();
+    using namespace aurora::gx::fifo;
+    write_u8(GX_AURORA);
+    write_u16(GX_AURORA_DRAW_INDEXED);
+    write_u8(static_cast<u8>(GX_TRIANGLES) | static_cast<u8>(GX_VTXFMT0));
+    write_u16(3);
+    write_u32(3);
+    const std::array<u16, 3> indices{0, 1, 2};
+    write_data(indices.data(), sizeof(indices));
+    for (u16 i = 0; i < 3; ++i) {
+      write_u8(0x61);
+      write_u8(0x41);
+      write_u8(static_cast<u8>(i));
+    }
+  }
+  GXSetColorUpdate(GX_FALSE);
+  const auto bytes = flush_and_capture();
+  reset_gx_state();
+  decode_fifo(bytes);
+  EXPECT_EQ(g_testDrawCount, 1u);
+  EXPECT_EQ(g_testVertexBytes, 9u);
+  EXPECT_EQ(g_testIndexBytes, 3u * sizeof(u16));
+  EXPECT_EQ(runtime_metrics::culledDraws.load(), 1u);
+  EXPECT_EQ(g_gxState.cullMode, GX_CULL_BACK);
+  EXPECT_FALSE(g_gxState.colorUpdate);
 }
 
 TEST_F(GXFifoTest, FifoPublishesOnlyAtExplicitBoundary) {

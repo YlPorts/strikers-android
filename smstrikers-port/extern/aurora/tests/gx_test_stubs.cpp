@@ -123,10 +123,20 @@ void resolve_sampled_textures(const ShaderInfo& info) noexcept {}
 
 // --- Buffer push stubs ---
 namespace aurora::gfx {
-Range push_verts(const uint8_t* data, size_t length, size_t alignment) { return {}; }
-Range push_indices(const uint8_t* data, size_t length, size_t alignment) { return {}; }
+size_t g_testVertexBytes = 0, g_testIndexBytes = 0, g_testStorageBytes = 0;
+Range push_verts(const uint8_t* data, size_t length, size_t alignment) {
+  g_testVertexBytes += length;
+  return {};
+}
+Range push_indices(const uint8_t* data, size_t length, size_t alignment) {
+  g_testIndexBytes += length;
+  return {};
+}
 Range push_uniform(const uint8_t* data, size_t length) { return {}; }
-Range push_storage(const uint8_t* data, size_t length) { return {}; }
+Range push_storage(const uint8_t* data, size_t length) {
+  g_testStorageBytes += length;
+  return {};
+}
 
 Vec2<uint32_t> get_render_target_size() noexcept { return {640, 480}; }
 void set_viewport(const Viewport& viewport) noexcept {}

@@ -769,7 +769,7 @@ void format_runtime_diagnostics(char* buffer, uint32_t capacity) {
       "frame=%u phase=%u render=%llu present_age_ms=%lld pipelines=%u samplers=%u compiling=%llx waiting=%llx "
       "fifo_published=%llu fifo_processed=%llu fifo_drain=%llu fifo_stage=%u "
       "gap_max_us=%u gaps_over25ms=%u slot_max_us=%u staging_max_us=%u "
-      "cpu_frame_max_us=%u draws_max=%u upload_max_kib=%u",
+      "cpu_frame_max_us=%u draws_max=%u upload_max_kib=%u culled_draws=%u empty_passes=%u",
       current_frame(), runtime_metrics::framePhase.load(std::memory_order_relaxed),
       static_cast<unsigned long long>(render_worker::progress()), static_cast<long long>(presentAge),
       runtime_metrics::pipelineCount.load(std::memory_order_relaxed),
@@ -780,7 +780,9 @@ void format_runtime_diagnostics(char* buffer, uint32_t capacity) {
       static_cast<unsigned long long>(fifo.drainTarget), fifo.stage,
       runtime_metrics::presentGapUs.take(), runtime_metrics::gapsOver25ms.exchange(0, std::memory_order_relaxed),
       runtime_metrics::frameSlotUs.take(), runtime_metrics::stagingUs.take(), runtime_metrics::cpuFrameUs.take(),
-      runtime_metrics::drawCalls.take(), runtime_metrics::uploadKiB.take());
+      runtime_metrics::drawCalls.take(), runtime_metrics::uploadKiB.take(),
+      runtime_metrics::culledDraws.exchange(0, std::memory_order_relaxed),
+      runtime_metrics::emptyAttachmentPasses.exchange(0, std::memory_order_relaxed));
 }
 } // namespace aurora::gfx
 

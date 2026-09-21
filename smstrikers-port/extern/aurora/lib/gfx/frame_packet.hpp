@@ -108,6 +108,31 @@ struct RenderPass {
 
   RenderTargetLayout target_layout() const noexcept;
   bool has_consumer() const { return resolveTarget || snapshotColorDst || snapshotDepthDst; }
+  // Copies/snapshots below a pass still need encoding even when the pass only
+  // loads and stores unchanged attachments (e.g. consecutive shadow captures).
+  // Keep clears, discards and MSAA resolves: each can have an effect without draws.
+  bool needs_attachment_pass() const {
+    if (hasDraws || msaaSamples != 1) {
+      return true;
+    }
+    for (uint32_t i = 0; i < colorAttachmentCount; ++i) {
+      const auto& color = colorAttachments[i];
+      if (color.resolveView || color.storeOp != wgpu::StoreOp::Store ||
+          !(color.loadOp == wgpu::LoadOp::Load ||
+            (color.loadOp == wgpu::LoadOp::Undefined && !color.clear))) {
+        return true;
+      }
+    }
+    if (hasDepth && (depthStoreOp != wgpu::StoreOp::Store ||
+                     !(depthLoadOp == wgpu::LoadOp::Load ||
+                       (depthLoadOp == wgpu::LoadOp::Undefined && !clearDepth)))) {
+      return true;
+    }
+    if (hasStencil && (stencilStoreOp != wgpu::StoreOp::Store || stencilLoadOp != wgpu::LoadOp::Load)) {
+      return true;
+    }
+    return false;
+  }
   bool has_content() const {
     if (hasDraws || clearDepth) {
       return true;
