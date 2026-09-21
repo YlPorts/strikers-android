@@ -44,7 +44,9 @@ final class SessionDiagnostics {
                         + " phase: 0=between frames, 1=frame slot, 2=staging, 3=recording, 4=FIFO drain,"
                         + " 5=cleanup, 6=finish, 7=overlay, 8=enqueue\n"
                         + "render: (frame_id << 8) | stage; 0=idle, 1=begin, 2=draw, 3=submit, 4=sync\n"
-                        + "fifo_stage: 0=idle, 1=buffer lock, 2=commands, 3=draw-done callback\n")
+                        + "fifo_stage: 0=idle, 1=buffer lock, 2=commands, 3=draw-done callback\n"
+                        + "*_max: peak since previous sample, not necessarily the same frame;"
+                        + " cpu_frame includes game/limiter/FIFO time, not GPU execution time\n")
                         .getBytes(StandardCharsets.UTF_8));
             } catch (IOException ignored) { }
             sample.run();

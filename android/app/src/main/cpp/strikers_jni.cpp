@@ -123,7 +123,7 @@ Java_com_ylports_strikers_StrikersActivity_nativePresentedFps(JNIEnv*, jclass) {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_ylports_strikers_StrikersActivity_nativeRuntimeSnapshot(JNIEnv* env, jclass) {
-    char sample[512];
+    char sample[1024];
     char game[256];
     aurora_format_runtime_diagnostics(sample, sizeof(sample));
     PortFormatGameDiagnostics(game, sizeof(game));

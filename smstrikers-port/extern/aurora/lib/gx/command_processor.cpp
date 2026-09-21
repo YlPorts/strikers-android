@@ -1002,6 +1002,8 @@ void handle_aurora(Reader& reader) noexcept {
     gfx::begin_offscreen(width, height);
   } else if (subCmd == GX_AURORA_END_OFFSCREEN) {
     gfx::end_offscreen();
+  } else if (subCmd == GX_AURORA_CLEAR_EFB) {
+    clear_efb();
   } else if (subCmd == GX_AURORA_DESTROY_TEXOBJ) {
     evict_texture_object(reader.read<u32>());
   } else if (subCmd == GX_AURORA_DESTROY_TLUT) {

@@ -46,6 +46,10 @@ extern std::atomic<uint32_t> endOffscreenCount;
 extern std::atomic<uint32_t> resolvePassCount;
 extern std::atomic<uint32_t> offscreenWidth;
 extern std::atomic<uint32_t> offscreenHeight;
+extern uint32_t clearMask;
+extern Vec4<float> lastClearColor;
+extern float lastClearDepth;
+extern bool hadResolveTexture;
 } // namespace testing
 } // namespace aurora::gfx
 
@@ -1280,6 +1284,31 @@ TEST_F(GXFifoTest, TevColorS10_Reg2) {
 // ============================================================================
 // CP registers (require __GXSetDirtyState() flush)
 // ============================================================================
+
+TEST_F(GXFifoTest, ClearOnlyPreservesWriteMasksAndSkipsCopyCache) {
+  using namespace aurora::gfx::testing;
+  for (unsigned mask = 0; mask < 8; ++mask) {
+    resolvePassCount.store(0);
+    GXSetColorUpdate((mask & 1) != 0);
+    GXSetAlphaUpdate((mask & 2) != 0);
+    GXSetZMode(GX_FALSE, GX_LEQUAL, (mask & 4) != 0);
+    GXSetCopyClear({40, 80, 120, 160}, 0xFFFFFF);
+    AuroraGXClearEFB();
+    const auto bytes = capture_fifo();
+    EXPECT_TRUE(has_aurora_cmd(bytes, GX_AURORA_CLEAR_EFB));
+    decode_fifo(bytes);
+    EXPECT_EQ(resolvePassCount.load(), mask ? 1u : 0u);
+    if (mask) {
+      EXPECT_EQ(clearMask, mask);
+      EXPECT_FALSE(hadResolveTexture);
+      EXPECT_NEAR(lastClearColor[0], 40.f / 255.f, 0.0001f);
+      EXPECT_NEAR(lastClearColor[3], 160.f / 255.f, 0.0001f);
+      EXPECT_EQ(lastClearDepth, aurora::gx::clear_depth_value());
+    }
+    EXPECT_TRUE(g_gxState.copyTextureCache.empty());
+    EXPECT_TRUE(g_gxState.copyTextures.empty());
+  }
+}
 
 // --- GXClearVtxDesc ---
 

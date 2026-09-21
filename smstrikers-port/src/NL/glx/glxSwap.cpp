@@ -321,11 +321,16 @@ static void hitz_Pre(bool)
     {
         hitz_AdvanceFrame();
         VIWaitForRetrace();
+#if !defined(__ANDROID__)
         u32 newRetraceCount = VIGetRetraceCount();
         if (newRetraceCount < count0 + 2)
         {
             VIWaitForRetrace();
         }
+#endif
+        // Android's VI shim already waits for the selected frame budget.
+        // The console cinematic's second retrace halves that limit (60 -> 30,
+        // 120 -> 60). Task/animation time uses elapsed time, not retrace count.
     }
     else if (value == 1.0f)
     {

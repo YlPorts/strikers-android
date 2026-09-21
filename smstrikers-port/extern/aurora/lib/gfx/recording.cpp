@@ -795,16 +795,19 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
   prevPass.resolveTarget = std::move(texture);
   prevPass.resolveRect = rect;
   prevPass.resolveFormat = resolveFormat;
-  // Push UV transform uniform for tex_copy_conv (crop region in UV space)
-  const auto srcW = static_cast<float>(prevPass.colorAttachments[SceneColorAttachmentIndex].size.width);
-  const auto srcH = static_cast<float>(prevPass.colorAttachments[SceneColorAttachmentIndex].size.height);
-  const std::array uvTransform{
-      static_cast<float>(rect.x) / srcW,
-      static_cast<float>(rect.y) / srcH,
-      static_cast<float>(rect.width) / srcW,
-      static_cast<float>(rect.height) / srcH,
-  };
-  prevPass.resolveUniformRange = push_uniform(uvTransform);
+  // A clear-only pass has no copy target and needs no conversion uniforms.
+  if (prevPass.resolveTarget) {
+    // Push UV transform uniform for tex_copy_conv (crop region in UV space).
+    const auto srcW = static_cast<float>(prevPass.colorAttachments[SceneColorAttachmentIndex].size.width);
+    const auto srcH = static_cast<float>(prevPass.colorAttachments[SceneColorAttachmentIndex].size.height);
+    const std::array uvTransform{
+        static_cast<float>(rect.x) / srcW,
+        static_cast<float>(rect.y) / srcH,
+        static_cast<float>(rect.width) / srcW,
+        static_cast<float>(rect.height) / srcH,
+    };
+    prevPass.resolveUniformRange = push_uniform(uvTransform);
+  }
   enqueue_pass(current_frame_packet(), g_recorder.currentRenderPass);
 
   // Populate new render pass from previous

@@ -75,6 +75,29 @@ TEST_F(GfxRecordingTest, CreateRestoreReturnsToEfb) {
   EXPECT_EQ(count_efb_passes(), 1u);
 }
 
+TEST_F(GfxRecordingTest, ClearOnlyHasNoCopyOrUploadAndRetainsAttachments) {
+  for (bool color : {false, true}) {
+    const auto beforePass = frame.renderPasses.size();
+    const auto beforeUniforms = frame.uniforms.size();
+    const auto layout = frame.renderPasses.back().target_layout();
+    resolve_pass_into({}, {}, color, color, true, {0.2f, 0.4f, 0.6f, 1.f}, 0.75f);
+    ASSERT_EQ(frame.renderPasses.size(), beforePass + 1);
+    const auto& previous = frame.renderPasses[beforePass - 1];
+    const auto& next = frame.renderPasses.back();
+    EXPECT_TRUE(previous.sealed);
+    EXPECT_FALSE(previous.resolveTarget);
+    EXPECT_EQ(frame.uniforms.size(), beforeUniforms);
+    EXPECT_TRUE(frame.textureCopies.empty());
+    EXPECT_TRUE(frame.textureUploads.empty());
+    EXPECT_EQ(next.target_layout().key, layout.key);
+    EXPECT_EQ(next.colorAttachments[SceneColorAttachmentIndex].clear, color);
+    EXPECT_EQ(next.colorAttachments[SceneColorAttachmentIndex].size.width, 640u);
+    EXPECT_TRUE(next.clearDepth);
+    EXPECT_EQ(next.clearDepthValue, 0.75f);
+    if (color) EXPECT_EQ(next.colorAttachments[SceneColorAttachmentIndex].clearValue.w(), 1.f);
+  }
+}
+
 TEST_F(GfxRecordingTest, EfbPassUsesDiscoveredSceneLayout) {
   ASSERT_FALSE(frame.renderPasses.empty());
   const auto discovered = scene_render_target_layout();

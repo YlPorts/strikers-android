@@ -617,10 +617,14 @@ std::optional<size_t> acquire_mapped_staging_buffer() {
 bool begin_frame() {
   ZoneScoped;
   // pace_frame_start();
+  const auto slotStart = PresentClock::now();
   runtime_metrics::framePhase.store(1, std::memory_order_relaxed);
   const size_t frameSlot = acquire_frame_slot();
+  const auto stagingStart = PresentClock::now();
+  runtime_metrics::frameSlotUs.record(duration_ns(stagingStart - slotStart) / 1000);
   runtime_metrics::framePhase.store(2, std::memory_order_relaxed);
   const auto stagingSlot = acquire_mapped_staging_buffer();
+  runtime_metrics::stagingUs.record(duration_ns(PresentClock::now() - stagingStart) / 1000);
   if (!stagingSlot) {
     g_frameSlots.release(frameSlot);
     runtime_metrics::framePhase.store(0, std::memory_order_relaxed);
@@ -665,12 +669,15 @@ void end_frame(EndFrameCallback callback) {
   ZoneScoped;
   if (g_cpuFrameStart.time_since_epoch().count() != 0) {
     const auto cpuFrameTime = PresentClock::now() - g_cpuFrameStart;
+    runtime_metrics::cpuFrameUs.record(duration_ns(cpuFrameTime) / 1000);
     update_ema(g_cpuFrameTimeNs, duration_ns(cpuFrameTime));
     const double cpuFrameTimeMs = std::chrono::duration<double, std::milli>{cpuFrameTime}.count();
     TracyPlot("aurora: cpuFrameTimeMs", cpuFrameTimeMs);
   }
   const auto recorded = end_recording();
   auto& frame = *recorded.packet;
+  runtime_metrics::drawCalls.record(frame.stats.drawCallCount);
+  runtime_metrics::uploadKiB.record((frame.stats.lastTextureUploadSize + 1023) / 1024);
   const size_t frameSlot = recorded.frameSlot;
   const uint64_t frameId = frame.frameId;
   end_pipeline_frame();
@@ -725,6 +732,10 @@ void after_present() noexcept {
   const int64_t nowNs = timestamp_ns(now);
   const int64_t previousPresentNs = g_lastPresentNs.exchange(nowNs, std::memory_order_acq_rel);
   if (previousPresentNs != 0) {
+    runtime_metrics::presentGapUs.record((nowNs - previousPresentNs) / 1000);
+    if (nowNs - previousPresentNs > 25'000'000) {
+      runtime_metrics::gapsOver25ms.fetch_add(1, std::memory_order_relaxed);
+    }
     update_ema(g_presentPeriodNs, nowNs - previousPresentNs);
     const double presentPeriodMs = static_cast<double>(g_presentPeriodNs.load(std::memory_order_acquire)) / 1'000'000.0;
     TracyPlot("aurora: presentPeriodMs", presentPeriodMs);
@@ -756,7 +767,9 @@ void format_runtime_diagnostics(char* buffer, uint32_t capacity) {
   const auto fifo = gx::fifo::runtime_progress();
   std::snprintf(buffer, capacity,
       "frame=%u phase=%u render=%llu present_age_ms=%lld pipelines=%u samplers=%u compiling=%llx waiting=%llx "
-      "fifo_published=%llu fifo_processed=%llu fifo_drain=%llu fifo_stage=%u",
+      "fifo_published=%llu fifo_processed=%llu fifo_drain=%llu fifo_stage=%u "
+      "gap_max_us=%u gaps_over25ms=%u slot_max_us=%u staging_max_us=%u "
+      "cpu_frame_max_us=%u draws_max=%u upload_max_kib=%u",
       current_frame(), runtime_metrics::framePhase.load(std::memory_order_relaxed),
       static_cast<unsigned long long>(render_worker::progress()), static_cast<long long>(presentAge),
       runtime_metrics::pipelineCount.load(std::memory_order_relaxed),
@@ -764,7 +777,10 @@ void format_runtime_diagnostics(char* buffer, uint32_t capacity) {
       static_cast<unsigned long long>(runtime_metrics::compilingPipeline.load(std::memory_order_relaxed)),
       static_cast<unsigned long long>(runtime_metrics::waitingPipeline.load(std::memory_order_relaxed)),
       static_cast<unsigned long long>(fifo.published), static_cast<unsigned long long>(fifo.processed),
-      static_cast<unsigned long long>(fifo.drainTarget), fifo.stage);
+      static_cast<unsigned long long>(fifo.drainTarget), fifo.stage,
+      runtime_metrics::presentGapUs.take(), runtime_metrics::gapsOver25ms.exchange(0, std::memory_order_relaxed),
+      runtime_metrics::frameSlotUs.take(), runtime_metrics::stagingUs.take(), runtime_metrics::cpuFrameUs.take(),
+      runtime_metrics::drawCalls.take(), runtime_metrics::uploadKiB.take());
 }
 } // namespace aurora::gfx
 

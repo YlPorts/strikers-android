@@ -217,10 +217,18 @@ std::atomic<uint32_t> endOffscreenCount{0};
 std::atomic<uint32_t> resolvePassCount{0};
 std::atomic<uint32_t> offscreenWidth{0};
 std::atomic<uint32_t> offscreenHeight{0};
+uint32_t clearMask = 0;
+Vec4<float> lastClearColor{};
+float lastClearDepth = 0;
+bool hadResolveTexture = false;
 } // namespace testing
 
 void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
                        Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat) {
+  testing::clearMask = (clearColor ? 1u : 0u) | (clearAlpha ? 2u : 0u) | (clearDepth ? 4u : 0u);
+  testing::lastClearColor = clearColorValue;
+  testing::lastClearDepth = clearDepthValue;
+  testing::hadResolveTexture = !!texture;
   testing::resolvePassCount.fetch_add(1, std::memory_order_release);
 }
 void begin_offscreen(uint32_t width, uint32_t height) {

@@ -13,4 +13,18 @@ inline std::atomic_uint32_t pipelineCount{0};
 inline std::atomic_uint32_t samplerCount{0};
 inline std::atomic_uint64_t compilingPipeline{0};
 inline std::atomic_uint64_t waitingPipeline{0};
+
+// Retain transient stalls between the sparse Android log samples. Each peak
+// covers the interval since its last read, not just the frame at sample time.
+struct IntervalPeak {
+  std::atomic_uint32_t value{0};
+  void record(uint64_t sample) noexcept {
+    const auto bounded = static_cast<uint32_t>(sample > UINT32_MAX ? UINT32_MAX : sample);
+    auto old = value.load(std::memory_order_relaxed);
+    while (old < bounded && !value.compare_exchange_weak(old, bounded, std::memory_order_relaxed)) { }
+  }
+  uint32_t take() noexcept { return value.exchange(0, std::memory_order_relaxed); }
+};
+inline IntervalPeak presentGapUs, frameSlotUs, stagingUs, cpuFrameUs, drawCalls, uploadKiB;
+inline std::atomic_uint32_t gapsOver25ms{0};
 } // namespace aurora::gfx::runtime_metrics
