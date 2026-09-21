@@ -10,13 +10,23 @@ final class DriverRuntime {
     static final String EXTRA_DRIVER = "com.ylports.strikers.DRIVER";
     private static String activeId = "";
 
-    static void prepare(Context context, String selectedId) {
+    static boolean usesCustomDriver(String backend) {
+        return "vulkan".equals(GraphicsSettings.backend(backend));
+    }
+
+    static void prepare(Context context, String selectedId, String backend) {
         activeId = "";
         try {
             for (String key : new String[]{"STRIKERS_VULKAN_PATH", "STRIKERS_DRIVER_DIR",
                     "STRIKERS_DRIVER_LIBRARY", "STRIKERS_DRIVER_HOOKS", "STRIKERS_DRIVER_TMP",
                     "STRIKERS_DRIVER_ID", "STRIKERS_DRIVER_PENDING", "STRIKERS_CUSTOM_DRIVER_FAILED"}) {
                 Os.unsetenv(key);
+            }
+            // GLES always uses Android's EGL/GLES driver, even if a Vulkan ZIP
+            // was selected earlier. Keep that preference for a later Vulkan run.
+            if (!usesCustomDriver(backend)) {
+                RunLog.append(context, "graphics: OpenGL ES using system EGL driver");
+                return;
             }
             DriverStore store = new DriverStore(context);
             DriverStore.Driver driver = store.find(selectedId);

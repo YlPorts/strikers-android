@@ -113,6 +113,8 @@ void execute_encoder_task(wgpu::CommandEncoder& cmd, FramePacket& frame, const E
 void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, RenderPass& passInfo) {
   ZoneScoped;
   g_currentPipeline = UINTPTR_MAX;
+  gx::reset_render_bindings();
+  DrawEncoder previousEncoder = nullptr;
 #ifdef AURORA_GFX_DEBUG_GROUPS
   std::vector<std::string> lastDebugGroupStack;
 #endif
@@ -160,11 +162,19 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
     case CommandType::Draw: {
       auto& draw = cmd.data.draw;
       if (draw.encoder != nullptr) {
+        if (previousEncoder != draw.encoder) {
+          // A clear or another built-in encoder may replace bindings/layouts.
+          gx::reset_render_bindings();
+          g_currentPipeline = UINTPTR_MAX;
+          previousEncoder = draw.encoder;
+        }
         draw.encoder(draw.payload.data(), pass, passInfo);
       }
     } break;
     case CommandType::CustomDraw: {
       render_custom_draw(cmd.data.customDraw, pass, passInfo);
+      previousEncoder = nullptr;
+      gx::reset_render_bindings();
       g_currentPipeline = UINTPTR_MAX;
       pass.SetBindGroup(0, resources().staticBindGroup);
       pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);

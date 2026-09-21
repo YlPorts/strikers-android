@@ -25,20 +25,26 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Configure CPU renderer tests
+      - name: Install headless OpenGL ES test runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1-mesa-dri
+      - name: Configure renderer tests
         run: >-
           cmake -S smstrikers-port/extern/aurora -B /tmp/strikers-render-tests
           -DCMAKE_BUILD_TYPE=Debug -DAURORA_ENABLE_DVD=OFF -DAURORA_ENABLE_CARD=OFF
           -DAURORA_DAWN_PROVIDER=package -DAURORA_SDL3_PROVIDER=vendor
           -DSDL_UNIX_CONSOLE_BUILD=ON -DSDL_X11=OFF -DSDL_WAYLAND=OFF
       - name: Build affected test targets
-        run: cmake --build /tmp/strikers-render-tests --target gx_texture_cache_tests render_worker_tests gx_fifo_tests gfx_recording_tests --parallel 2
+        run: cmake --build /tmp/strikers-render-tests --target gx_texture_cache_tests render_worker_tests gx_fifo_tests gfx_recording_tests opengles_render_test --parallel 2
       - name: Run texture ownership, bounded memory, waits and primitive regressions
         run: |
           /tmp/strikers-render-tests/tests/gx_texture_cache_tests
           /tmp/strikers-render-tests/tests/render_worker_tests
           /tmp/strikers-render-tests/tests/gx_fifo_tests
           /tmp/strikers-render-tests/tests/gfx_recording_tests
+      - name: Validate real GLES shaders, alpha blending and readback
+        run: timeout -k 5 60 /tmp/strikers-render-tests/tests/opengles_render_test
 
   app-shell:
     name: full native APK

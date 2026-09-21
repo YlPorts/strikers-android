@@ -1,9 +1,11 @@
 #include "pipeline.hpp"
+#include "draw_bindings.hpp"
 
 #include "../gfx/encoding.hpp"
 #include "../gfx/resources.hpp"
 #include "../gfx/pipeline_cache.hpp"
 #include "../gfx/resource_cache.hpp"
+#include "../gfx/runtime_metrics.hpp"
 
 #include "gx_fmt.hpp"
 #include "shader_info.hpp"
@@ -11,6 +13,11 @@
 #include <tracy/Tracy.hpp>
 
 namespace aurora::gx {
+namespace {
+thread_local DrawBindingCache g_drawBindings;
+}
+
+void reset_render_bindings() { g_drawBindings = {}; }
 
 wgpu::RenderPipeline create_pipeline(const PipelineConfig& config) {
   ZoneScoped;
@@ -27,14 +34,22 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
   }
 
   const auto& resources = gfx::detail::resources();
+  const auto changes = g_drawBindings.update(data);
+  if (changes.saved != 0) {
+    gfx::runtime_metrics::bindingsSaved.fetch_add(changes.saved, std::memory_order_relaxed);
+  }
   pass.SetImmediates(0, &data.immediateData, sizeof(data.immediateData));
-  const std::array offsets{data.uniformRange.offset};
-  pass.SetBindGroup(1, resources.uniformBindGroup, offsets.size(), offsets.data());
-  if (data.bindGroups.textureBindGroup) {
+  if (changes.uniform) {
+    const std::array offsets{data.uniformRange.offset};
+    pass.SetBindGroup(1, resources.uniformBindGroup, offsets.size(), offsets.data());
+  }
+  if (changes.texture) {
     pass.SetBindGroup(2, gfx::find_bind_group(data.bindGroups.textureBindGroup));
   }
-  pass.SetIndexBuffer(resources.indexBuffer, wgpu::IndexFormat::Uint16, data.idxRange.offset, data.idxRange.size);
-  if (data.dstAlpha != UINT32_MAX) {
+  if (changes.indices) {
+    pass.SetIndexBuffer(resources.indexBuffer, wgpu::IndexFormat::Uint16, data.idxRange.offset, data.idxRange.size);
+  }
+  if (changes.alpha) {
     const wgpu::Color color{0.f, 0.f, 0.f, data.dstAlpha / 255.f};
     pass.SetBlendConstant(&color);
   }

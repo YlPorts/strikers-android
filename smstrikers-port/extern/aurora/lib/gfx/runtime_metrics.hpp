@@ -28,4 +28,7 @@ struct IntervalPeak {
 inline IntervalPeak presentGapUs, frameSlotUs, stagingUs, cpuFrameUs, drawCalls, uploadKiB;
 inline std::atomic_uint32_t gapsOver25ms{0};
 inline std::atomic_uint32_t culledDraws{0}, emptyAttachmentPasses{0};
+inline std::atomic_uint32_t bindingsSaved{0};
+// 0 starting, 1 Vulkan, 2 OpenGL ES, 3 another backend.
+inline std::atomic_uint32_t activeBackend{0};
 } // namespace aurora::gfx::runtime_metrics

@@ -122,7 +122,8 @@ public final class GameBootstrapActivity extends Activity {
                     String.format(Locale.US, "%.6f", renderScale), true);
 
             String graphics = GraphicsSettings.applyEnvironment(getIntent(), prefs);
-            DriverRuntime.prepare(this, getIntent().getStringExtra(DriverRuntime.EXTRA_DRIVER));
+            DriverRuntime.prepare(this, getIntent().getStringExtra(DriverRuntime.EXTRA_DRIVER),
+                    GraphicsSettings.launchBackend(getIntent(), prefs));
             // Speculative copies/conversion can compete with a draw's mandatory
             // conversion and retain unused data. RAM size alone did not establish
             // a benefit on phones; use the normal content cache on every device.

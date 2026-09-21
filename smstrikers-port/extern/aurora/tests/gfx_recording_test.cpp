@@ -5,6 +5,7 @@
 #include "gfx/resources.hpp"
 #include "gfx/texture.hpp"
 #include "webgpu/gpu.hpp"
+#include "gx/draw_bindings.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -14,6 +15,57 @@ namespace {
 
 constexpr auto ColorFormat = wgpu::TextureFormat::RGBA8Unorm;
 constexpr auto DepthFormat = wgpu::TextureFormat::Depth24Plus;
+
+TEST(GxDrawBindings, RepeatedEffectsKeepDrawsButAvoidRepeatedDriverState) {
+  gx::DrawBindingCache cache;
+  gx::DrawData draw{};
+  draw.uniformRange = {256, 64};
+  draw.idxRange = {0, 12};
+  draw.indexCount = 6;
+  draw.bindGroups.textureBindGroup = 42;
+  draw.dstAlpha = 128;
+  uint32_t binds = 0, saved = 0;
+  for (uint32_t i = 0; i < 100; ++i) {
+    draw.immediateData.vtxStart = i * 64;
+    const auto changes = cache.update(draw);
+    binds += changes.uniform + changes.texture + changes.indices + changes.alpha;
+    saved += changes.saved;
+  }
+  EXPECT_EQ(binds, 4u);
+  EXPECT_EQ(saved, 396u);
+  draw.uniformRange.offset = 512;
+  draw.idxRange = {12, 24};
+  draw.bindGroups.textureBindGroup = 43;
+  draw.dstAlpha = 64;
+  const auto changed = cache.update(draw);
+  EXPECT_TRUE(changed.uniform && changed.texture && changed.indices && changed.alpha);
+  EXPECT_EQ(changed.saved, 0u);
+  cache = {}; // New pass, custom callback or another encoder invalidates state.
+  const auto restored = cache.update(draw);
+  EXPECT_TRUE(restored.uniform && restored.texture && restored.indices && restored.alpha);
+}
+
+TEST(GxDrawBindings, UnusedBindingsDoNotEraseStateOrBindZeroLengthIndexBuffers) {
+  gx::DrawBindingCache cache;
+  gx::DrawData draw{};
+  draw.dstAlpha = UINT32_MAX;
+  auto changes = cache.update(draw);
+  EXPECT_TRUE(changes.uniform);
+  EXPECT_FALSE(changes.texture || changes.indices || changes.alpha);
+  draw.indexCount = 6;
+  draw.idxRange = {16, 12};
+  draw.bindGroups.textureBindGroup = 99;
+  draw.dstAlpha = 255;
+  changes = cache.update(draw);
+  EXPECT_TRUE(changes.texture && changes.indices && changes.alpha);
+  auto untextured = draw;
+  untextured.bindGroups.textureBindGroup = 0;
+  untextured.indexCount = 0;
+  untextured.dstAlpha = UINT32_MAX;
+  cache.update(untextured);
+  changes = cache.update(draw);
+  EXPECT_FALSE(changes.uniform || changes.texture || changes.indices || changes.alpha);
+}
 
 class GfxRecordingTest : public ::testing::Test {
 protected:

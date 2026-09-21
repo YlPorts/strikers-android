@@ -91,7 +91,7 @@ constexpr std::array PreferredBackendOrder{
 #ifdef DAWN_ENABLE_BACKEND_OPENGLES
     BACKEND_OPENGLES,
 #endif
-#ifdef DAWN_ENABLE_BACKEND_NULL
+#if defined(DAWN_ENABLE_BACKEND_NULL) && !defined(__ANDROID__)
     BACKEND_NULL,
 #endif
 };
@@ -145,12 +145,14 @@ AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) noexce
     if (webgpu::initialize(selectedBackend, config.allowCpuAdapter)) {
       windowCreated = true;
     } else {
+      webgpu::reset_failed_initialization();
       window::destroy_window();
     }
   }
 
   if (!windowCreated) {
     for (const auto backendType : PreferredBackendOrder) {
+      if (backendType == config.desiredBackend) continue;
       selectedBackend = backendType;
       if (!window::create_window(selectedBackend)) {
         continue;
@@ -159,6 +161,7 @@ AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) noexce
         windowCreated = true;
         break;
       } else {
+        webgpu::reset_failed_initialization();
         window::destroy_window();
       }
     }

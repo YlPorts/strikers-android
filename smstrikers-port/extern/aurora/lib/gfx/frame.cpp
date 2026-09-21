@@ -765,11 +765,14 @@ void format_runtime_diagnostics(char* buffer, uint32_t capacity) {
   const int64_t lastPresent = g_lastPresentNs.load(std::memory_order_relaxed);
   const int64_t presentAge = lastPresent ? (timestamp_ns(PresentClock::now()) - lastPresent) / 1'000'000 : -1;
   const auto fifo = gx::fifo::runtime_progress();
+  const auto backend = runtime_metrics::activeBackend.load(std::memory_order_relaxed);
+  const char* backendName = backend == 1 ? "vulkan" : backend == 2 ? "opengles" : backend == 3 ? "other" : "starting";
   std::snprintf(buffer, capacity,
       "frame=%u phase=%u render=%llu present_age_ms=%lld pipelines=%u samplers=%u compiling=%llx waiting=%llx "
       "fifo_published=%llu fifo_processed=%llu fifo_drain=%llu fifo_stage=%u "
       "gap_max_us=%u gaps_over25ms=%u slot_max_us=%u staging_max_us=%u "
-      "cpu_frame_max_us=%u draws_max=%u upload_max_kib=%u culled_draws=%u empty_passes=%u",
+      "cpu_frame_max_us=%u draws_max=%u upload_max_kib=%u culled_draws=%u empty_passes=%u "
+      "bindings_saved=%u backend=%s",
       current_frame(), runtime_metrics::framePhase.load(std::memory_order_relaxed),
       static_cast<unsigned long long>(render_worker::progress()), static_cast<long long>(presentAge),
       runtime_metrics::pipelineCount.load(std::memory_order_relaxed),
@@ -782,7 +785,8 @@ void format_runtime_diagnostics(char* buffer, uint32_t capacity) {
       runtime_metrics::frameSlotUs.take(), runtime_metrics::stagingUs.take(), runtime_metrics::cpuFrameUs.take(),
       runtime_metrics::drawCalls.take(), runtime_metrics::uploadKiB.take(),
       runtime_metrics::culledDraws.exchange(0, std::memory_order_relaxed),
-      runtime_metrics::emptyAttachmentPasses.exchange(0, std::memory_order_relaxed));
+      runtime_metrics::emptyAttachmentPasses.exchange(0, std::memory_order_relaxed),
+      runtime_metrics::bindingsSaved.exchange(0, std::memory_order_relaxed), backendName);
 }
 } // namespace aurora::gfx
 

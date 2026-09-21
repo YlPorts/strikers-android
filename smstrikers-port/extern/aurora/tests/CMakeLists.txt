@@ -182,11 +182,19 @@ if (AURORA_ENABLE_GX)
   target_link_libraries(gfx_recording_tests PRIVATE
     aurora::gx
     aurora::vi
+    absl::flat_hash_map
     gtest
     gtest_main
   )
   aurora_copy_runtime_dlls(gfx_recording_tests)
   gtest_discover_tests(gfx_recording_tests)
+
+  if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(opengles_render_test opengles_render_test.cpp)
+    target_include_directories(opengles_render_test PRIVATE ../include ../lib)
+    target_compile_definitions(opengles_render_test PRIVATE AURORA TARGET_PC)
+    target_link_libraries(opengles_render_test PRIVATE aurora::gx aurora::vi absl::flat_hash_map ${CMAKE_DL_LIBS})
+  endif ()
 endif () # AURORA_ENABLE_GX
 
 # DVD API tests

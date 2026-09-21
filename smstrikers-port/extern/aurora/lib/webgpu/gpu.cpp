@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -22,6 +23,7 @@
 #include "../gfx/frame.hpp"
 #include "../gfx/recording.hpp"
 #include "../gfx/render_worker.hpp"
+#include "../gfx/runtime_metrics.hpp"
 #include "../internal.hpp"
 #include "../window.hpp"
 #include "gpu_prof.hpp"
@@ -758,6 +760,24 @@ static bool create_surface() {
   return true;
 }
 
+void reset_failed_initialization() {
+  // A failed device/adapter can otherwise survive into the next backend's
+  // request and be mistaken for its result. No renderer workers exist yet.
+  g_queue = {};
+  if (g_surface) g_surface.Unconfigure();
+  g_surface = {};
+  g_surfaceCapabilities = {};
+  g_device = {};
+  g_adapterInfo = {};
+  g_adapter = {};
+  g_instance = {};
+  g_hasCoreFeatures = false;
+  g_bcTexturesSupported = false;
+  g_astcTexturesSupported = false;
+  g_textureComponentSwizzleSupported = false;
+  gfx::runtime_metrics::activeBackend.store(0, std::memory_order_relaxed);
+}
+
 bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
   if (!g_instance) {
     Log.info("Creating WebGPU instance");
@@ -826,41 +846,48 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
     Log.info("Requesting adapter\n  Feature level: {}\n  Power preference: {}\n  Backend: {}\n  Compatible surface: {}",
              magic_enum::enum_name(options.featureLevel), magic_enum::enum_name(options.powerPreference),
              magic_enum::enum_name(options.backendType), static_cast<bool>(options.compatibleSurface));
-    bool requestAdapterCallbackCompleted = false;
-    wgpu::RequestAdapterStatus requestAdapterStatus = wgpu::RequestAdapterStatus::CallbackCancelled;
-    std::string requestAdapterMessage;
+    struct AdapterRequest {
+      bool completed = false;
+      wgpu::RequestAdapterStatus status = wgpu::RequestAdapterStatus::CallbackCancelled;
+      std::string message;
+      wgpu::Adapter adapter;
+    };
+    // A timeout may cancel the callback only when its instance is destroyed.
+    // Keep its data alive and isolated from the next backend attempt.
+    const auto request = std::make_shared<AdapterRequest>();
     const auto future = g_instance.RequestAdapter(
         &options, wgpu::CallbackMode::WaitAnyOnly,
-        [&](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, wgpu::StringView message) {
-          requestAdapterCallbackCompleted = true;
-          requestAdapterStatus = status;
-          requestAdapterMessage = std::string{std::string_view{message}};
+        [request](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, wgpu::StringView message) {
+          request->completed = true;
+          request->status = status;
+          request->message = std::string{std::string_view{message}};
           if (status == wgpu::RequestAdapterStatus::Success) {
-            g_adapter = std::move(adapter);
+            request->adapter = std::move(adapter);
           } else {
             Log.warn("Adapter request failed: {}: {}", magic_enum::enum_name(status), message);
           }
         });
     const auto status = g_instance.WaitAny(future, 5000000000);
     if (status != wgpu::WaitStatus::Success) {
-      if (requestAdapterCallbackCompleted) {
+      if (request->completed) {
         Log.error("Failed to create adapter: wait status {}, request status {}, message: {}",
-                  magic_enum::enum_name(status), magic_enum::enum_name(requestAdapterStatus), requestAdapterMessage);
+                  magic_enum::enum_name(status), magic_enum::enum_name(request->status), request->message);
       } else {
         Log.error("Failed to create adapter: wait status {}, request callback did not complete",
                   magic_enum::enum_name(status));
       }
       return false;
     }
-    if (!g_adapter) {
-      if (requestAdapterCallbackCompleted) {
+    if (!request->adapter) {
+      if (request->completed) {
         Log.error("Failed to create adapter: request status {}, message: {}",
-                  magic_enum::enum_name(requestAdapterStatus), requestAdapterMessage);
+                  magic_enum::enum_name(request->status), request->message);
       } else {
         Log.error("Failed to create adapter: request callback did not complete");
       }
       return false;
     }
+    g_adapter = std::move(request->adapter);
   }
   g_adapter.GetInfo(&g_adapterInfo);
   auto adapterName = g_adapterInfo.device;
@@ -1032,11 +1059,12 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
             Log.warn("Device lost: {}", message);
           }
         });
+    const auto requestedDevice = std::make_shared<wgpu::Device>();
     const auto future =
         g_adapter.RequestDevice(&deviceDescriptor, wgpu::CallbackMode::WaitAnyOnly,
-                                [](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
+                                [requestedDevice](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
                                   if (status == wgpu::RequestDeviceStatus::Success) {
-                                    g_device = std::move(device);
+                                    *requestedDevice = std::move(device);
                                   } else {
                                     Log.warn("Device request failed: {}", message);
                                   }
@@ -1046,9 +1074,10 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
       Log.error("Failed to create device: {}", magic_enum::enum_name(status));
       return false;
     }
-    if (!g_device) {
+    if (!*requestedDevice) {
       return false;
     }
+    g_device = std::move(*requestedDevice);
     g_device.SetLoggingCallback(wgpu_log);
   }
   g_queue = g_device.GetQueue();
@@ -1090,6 +1119,8 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
   gpu_prof::initialize();
   resize_swapchain(size.fb_width, size.fb_height, size.native_fb_width, size.native_fb_height, true);
   g_initialized = true;
+  gfx::runtime_metrics::activeBackend.store(g_backendType == wgpu::BackendType::Vulkan ? 1u :
+      g_backendType == wgpu::BackendType::OpenGLES ? 2u : 3u, std::memory_order_relaxed);
   return true;
 }
 
