@@ -111,16 +111,29 @@ jobs:
           gradle --no-daemon -p android :app:assembleRelease --stacktrace 2>&1 | tee android-apk-build.log
 
       - name: Collect unstripped native libraries
-        if: always()
         shell: bash
         run: |
-          set -eu
-          mkdir -p android-native-debug
-          STRIKERS_SO="$(find android/app/.cxx -type f -path '*/arm64-v8a/*' -name 'libstrikers.so' -print -quit 2>/dev/null || true)"
-          SDL_SO="$(find android/app/.cxx -type f -path '*/arm64-v8a/*' -name 'libSDL3.so' -print -quit 2>/dev/null || true)"
-          if [ -n "$STRIKERS_SO" ]; then cp "$STRIKERS_SO" android-native-debug/libstrikers.so; fi
-          if [ -n "$SDL_SO" ]; then cp "$SDL_SO" android-native-debug/libSDL3.so; fi
-          ls -lh android-native-debug || true
+          python3 - <<'PY'
+          import hashlib, json, shutil, subprocess
+          from pathlib import Path
+          output = Path('android-native-debug')
+          output.mkdir(exist_ok=True)
+          # AGP puts linked objects in intermediates/cxx; .cxx alone is the
+          # configure directory and silently produced empty artifacts before.
+          roots = [Path('android/app/build/intermediates/cxx'), Path('android/app/.cxx')]
+          manifest = {'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'libraries': []}
+          for name in ['libstrikers.so', 'libSDL3.so', 'libstrikers_diag.so']:
+              candidates = sorted(p for root in roots for p in root.rglob(name) if 'arm64-v8a' in p.parts)
+              source = next((p for p in candidates if '.symtab' in subprocess.check_output(['readelf', '-S', str(p)], text=True)), None)
+              if source is None:
+                  raise SystemExit('Missing unstripped ARM64 symbols for ' + name)
+              shutil.copy2(source, output / name)
+              notes = subprocess.check_output(['readelf', '-n', str(source)], text=True)
+              build_id = next(line.strip() for line in notes.splitlines() if 'Build ID:' in line)
+              manifest['libraries'].append({'name': name, 'build_id': build_id, 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()})
+          (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print(json.dumps(manifest, indent=2))
+          PY
 
       - name: Upload unstripped native libraries
         if: always()
@@ -128,7 +141,7 @@ jobs:
         with:
           name: strikers-android-unstripped-native
           path: android-native-debug/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
       - name: Preserve APK build log
         if: always()
