@@ -6,7 +6,6 @@
 #include "NL/glx/glxTexture.h"
 #include "port/endian.h"
 #include "dolphin/os.h"
-#include "port/endian.h"
 #include <stdlib.h>
 extern "C" int port_region_owns(const void*);  // src/platform/memalloc.cpp
 
@@ -36,6 +35,10 @@ static unsigned long nGridMemory;
 static PlatTexture texobj;
 
 static PlatTexture* glx_MakeGridTexture(int width, int height);
+
+static_assert(sizeof(GXTextureHeader) == 0x20, "disc texture header size");
+static_assert(sizeof(glTexBundleHeader) == 0x20, "disc bundle header size");
+static_assert(sizeof(glTexBundleDict) == 0x10, "disc bundle dictionary size");
 
 static inline void (TexDestructor::* glx_GetTexDestructorCallback())(const unsigned long&, PlatTexture**)
 {
@@ -294,14 +297,45 @@ bool glx_AddTex(uintptr_t handle, PlatTexture* pTex)
 /**
  * Offset/Address/Size: 0xBD4 | 0x801B7E90 | size: 0x32C
  */
-PlatTexture* glx_MakeTexture(GXTextureHeader* header, uintptr_t texhandle)
+// Validate on-disk bytes before GCTextureSize (zero levels never terminates) or
+// any allocation/copy. The payload remains big-endian and may be read again.
+static bool glx_ValidateTexture(const void* data, size_t size, u32* pixelSize = NULL)
 {
+    if (data == NULL || size < 0x20)
+        return false;
+    const u8* bytes = (const u8*)data;
+    const u32 levels = port_be32(bytes);
+    const u32 format = port_be32(bytes + 4);
+    const u16 width = port_be16(bytes + 0x0E);
+    const u16 height = port_be16(bytes + 0x10);
+    const u32 entries = port_be32(bytes + 0x14);
+    if (levels == 0 || levels > 11 || format >= GXTex_Num
+        || width == 0 || width > 1024 || height == 0 || height > 1024
+        || entries > 32767)
+        return false;
+    const u32 pixels = GCTextureSize((eGXTextureFormat)format, width, height, levels, -1);
+    const size_t available = size - 0x20;
+    if (pixels > available || entries > (available - pixels) / 2)
+        return false;
+    if (pixelSize != NULL)
+        *pixelSize = pixels;
+    return true;
+}
+
+PlatTexture* glx_MakeTexture(GXTextureHeader* header, uintptr_t texhandle, unsigned long size)
+{
+    if (!glx_ValidateTexture(header, size))
+    {
+        OSReport("[texture] invalid texture payload: handle=%lu size=%lu\n", (unsigned long)texhandle, size);
+        return NULL;
+    }
     // PORT: the header is big-endian, straight off the disc, but decode it into locals rather than rewriting it.
-    const u32 hdrNumLevels = port_be32(&header->numLevels);
-    const eGXTextureFormat hdrFormat = (eGXTextureFormat)port_be32(&header->format);
-    const u16 hdrWidth = port_be16(&header->width);
-    const u16 hdrHeight = port_be16(&header->height);
-    const u32 hdrNumEntries = port_be32(&header->numEntries);
+    const u8* bytes = (const u8*)header;
+    const u32 hdrNumLevels = port_be32(bytes);
+    const eGXTextureFormat hdrFormat = (eGXTextureFormat)port_be32(bytes + 4);
+    const u16 hdrWidth = port_be16(bytes + 0x0E);
+    const u16 hdrHeight = port_be16(bytes + 0x10);
+    const u32 hdrNumEntries = port_be32(bytes + 0x14);
 
     PlatTexture* pTex;
     u16 width;
@@ -315,6 +349,8 @@ PlatTexture* glx_MakeTexture(GXTextureHeader* header, uintptr_t texhandle)
 
     // Allocate PlatTexture (inline version of glx_CreatePlatTexture)
     pTex = (PlatTexture*)glResourceAlloc(sizeof(PlatTexture), GLM_Header);
+    if (pTex == NULL)
+        return NULL;
     if (pTex != NULL)
     {
         pTex->m_Magic = 0x50544558;
@@ -353,16 +389,16 @@ PlatTexture* glx_MakeTexture(GXTextureHeader* header, uintptr_t texhandle)
     pTex->m_SwizzledData = glResourceAlloc(GCTextureSize(format, width, height, numLevels, -1), GLM_TextureData);
     pTex->m_LinearData = NULL;
 
-    memcpy(pTex->m_Bits, header->numBits, sizeof(pTex->m_Bits));
+    memcpy(pTex->m_Bits, bytes + 8, sizeof(pTex->m_Bits));
 
-    pTex->m_bMissingTexture = header->missingTexture ? true : false;
+    pTex->m_bMissingTexture = bytes[0x0C] != 0;
 
     numEntries = hdrNumEntries;
     if (numEntries != 0)
     {
         pTex->m_PaletteData = (u16*)glResourceAlloc(numEntries * 2, GLM_TextureData);
         pTex->m_nPaletteEntries = (s16)numEntries;
-        memcpy(pTex->m_PaletteData, (u8*)&header[1] + textureSize, hdrNumEntries * 2);
+        memcpy(pTex->m_PaletteData, bytes + 0x20 + textureSize, hdrNumEntries * 2);
     }
 
     memcpy(pTex->m_SwizzledData, (const u8*)header + 0x20, textureSize);
@@ -377,7 +413,7 @@ PlatTexture* glx_MakeTexture(GXTextureHeader* header, uintptr_t texhandle)
  */
 inline int BundleSortProc(const glTexBundleDict* a, const glTexBundleDict* b)
 {
-    return a->offset - b->offset;
+    return (a->offset > b->offset) - (a->offset < b->offset);
 }
 
 /**
@@ -401,6 +437,15 @@ bool glplatLoadTextureBundle(const char* filename)
     if (pFile == NULL)
     {
         nlPrintf("file '%s' not found\n", filename);
+        return false;
+    }
+
+    unsigned int fileSize = 0;
+    nlFileSize(pFile, &fileSize);
+    if (fileSize < 0x20)
+    {
+        nlClose(pFile);
+        return false;
     }
 
     pHeader = (glTexBundleHeader*)nlMalloc(sizeof(glTexBundleHeader), 0x20, 1);
@@ -409,8 +454,13 @@ bool glplatLoadTextureBundle(const char* filename)
     port_be32_array(pHeader, 8);
 
     uNumFiles = pHeader->numTextures;
+    if (uNumFiles > (fileSize - 0x20) / sizeof(glTexBundleDict))
+    {
+        nlFree(pHeader);
+        nlClose(pFile);
+        return false;
+    }
     uSize = uNumFiles * sizeof(glTexBundleDict);
-    // Keep dictionarySize as its own copy: passing uSize directly instead costs
     const unsigned long dictionarySize = uSize;
 
     pDictionary = (glTexBundleDict*)nlMalloc((uBaseOffset = dictionarySize), 0x20, 1);
@@ -418,7 +468,25 @@ bool glplatLoadTextureBundle(const char* filename)
     // PORT: four big-endian u32s per entry, hash, offset, size, pad.
     port_be32_array(pDictionary, uNumFiles * 4);
 
-    pData = (unsigned char*)nlMalloc(0x40800, 0x20, 1);
+    // A fixed 0x40800 scratch buffer overflowed for larger texture entries.
+    // Keep streaming one entry at a time, sized to the largest validated entry.
+    const size_t payloadSize = fileSize - 0x20 - dictionarySize;
+    size_t largestEntry = 0x20;
+    for (unsigned long i = 0; i < uNumFiles; ++i)
+    {
+        const glTexBundleDict& entry = pDictionary[i];
+        if (entry.offset > payloadSize || entry.fileSize < 0x20
+            || entry.fileSize > payloadSize - entry.offset)
+        {
+            nlFree(pDictionary);
+            nlFree(pHeader);
+            nlClose(pFile);
+            return false;
+        }
+        if (entry.fileSize > largestEntry)
+            largestEntry = entry.fileSize;
+    }
+    pData = (unsigned char*)nlMalloc(largestEntry, 0x20, 1);
     nlQSort<glTexBundleDict>(pDictionary, uNumFiles, BundleSortProc);
 
     uBaseOffset = uSize + 0x20;
@@ -427,6 +495,15 @@ bool glplatLoadTextureBundle(const char* filename)
     {
         nlSeek(pFile, uBaseOffset + pDictionary[i].offset, 0);
         nlRead(pFile, pData, pDictionary[i].fileSize);
+        if (!glx_ValidateTexture(pData, pDictionary[i].fileSize))
+        {
+            OSReport("[texture] invalid payload in bundle %s, entry %lu\n", filename, i);
+            nlFree(pData);
+            nlFree(pDictionary);
+            nlFree(pHeader);
+            nlClose(pFile);
+            return false;
+        }
         if (glxTextureLoad_cb == NULL)
         {
             glplatTextureAdd(pDictionary[i].hash, pData, pDictionary[i].fileSize);
@@ -462,26 +539,54 @@ bool glplatLoadTextureBundle(const char* filename)
 /**
  * Offset/Address/Size: 0x93C | 0x801B7BF8 | size: 0xB8
  */
-static bool glxParseTextureBundle(const char* filedata)
+static bool glxParseTextureBundle(const char* filedata, size_t size)
 {
-    const int numTextures = *(int*)(filedata + 4);
-    const glTexBundleDict* dict = (glTexBundleDict*)(filedata + 0x20);
-    const char* textureData = (char*)dict + (numTextures * 0x10);
+    if (filedata == NULL || size < 0x20)
+        return false;
+    // Unlike the streaming loader, the async path receives untouched disc
+    // bytes. Native-endian reads turn a small count/offset into a huge address.
+    const u32 numTextures = port_be32(filedata + 4);
+    if (numTextures > (size - 0x20) / 0x10)
+        return false;
+    const char* dict = filedata + 0x20;
+    const size_t dataOffset = 0x20 + (size_t)numTextures * 0x10;
+    const char* textureData = filedata + dataOffset;
+    const size_t payloadSize = size - dataOffset;
 
-    for (int i = 0; i < numTextures; i++)
+    // Preflight every entry before mutating the texture inventory. Subtraction
+    // checks prevent overflow and precede forming/dereferencing each pointer.
+    for (u32 i = 0; i < numTextures; ++i)
     {
-        GXTextureHeader* currentTextureHeader = (GXTextureHeader*)(textureData + dict[i].offset);
+        const char* entry = dict + (size_t)i * 0x10;
+        const u32 offset = port_be32(entry + 4);
+        const u32 textureSize = port_be32(entry + 8);
+        if (offset > payloadSize || textureSize > payloadSize - offset
+            || !glx_ValidateTexture(textureData + offset, textureSize))
+        {
+            OSReport("[texture] invalid bundle entry %u/%u: offset=%u size=%u bundle=%lu\n",
+                     i, numTextures, offset, textureSize, (unsigned long)size);
+            return false;
+        }
+    }
+
+    for (u32 i = 0; i < numTextures; ++i)
+    {
+        const char* entry = dict + (size_t)i * 0x10;
+        const u32 hash = port_be32(entry);
+        const u32 offset = port_be32(entry + 4);
+        const u32 textureSize = port_be32(entry + 8);
+        const void* currentTextureHeader = textureData + offset;
 
         if (glxTextureLoad_cb == NULL)
         {
-            glplatTextureAdd(dict[i].hash, currentTextureHeader, dict[i].fileSize);
+            glplatTextureAdd(hash, currentTextureHeader, textureSize);
         }
         else
         {
-            unsigned long newHash = glxTextureLoad_cb(dict[i].hash);
+            unsigned long newHash = glxTextureLoad_cb(hash);
             if (newHash != -1 && glTextureLoad(newHash) != 0)
             {
-                glplatTextureReplace(newHash, currentTextureHeader, dict[i].fileSize);
+                glplatTextureReplace(newHash, currentTextureHeader, textureSize);
             }
         }
     }
@@ -517,7 +622,7 @@ bool glplatBeginLoadTextureBundle(const char* filename, void (*callback)(void*, 
  */
 bool glplatEndLoadTextureBundle(void* data, unsigned long size)
 {
-    return glxParseTextureBundle((const char*)data);
+    return glxParseTextureBundle((const char*)data, size);
 }
 
 /**
@@ -767,7 +872,7 @@ void PlatTexture::Prepare()
 void glplatTextureAdd(uintptr_t handle, const void* textureData, unsigned long size)
 {
     unsigned long handleCopy;
-    PlatTexture* pTex = glx_MakeTexture((GXTextureHeader*)textureData, handle);
+    PlatTexture* pTex = glx_MakeTexture((GXTextureHeader*)textureData, handle, size);
     nlAVLTree<unsigned long, PlatTexture*, DefaultKeyCompare<unsigned long> >* textureTree;
     handleCopy = handle;
 
@@ -786,8 +891,10 @@ void glplatTextureAdd(uintptr_t handle, const void* textureData, unsigned long s
  */
 void glplatTextureReplace(uintptr_t handle, const void* textureData, unsigned long size)
 {
+    u32 sourcePixelSize = 0;
+    if (!glx_ValidateTexture(textureData, size, &sourcePixelSize))
+        return;
     // PORT: the header is NOT swapped in place here.
-    const GXTextureHeader* pHeader = (GXTextureHeader*)textureData;
     PlatTexture* pTex = glx_GetTex(handle, false, false);
     if (pTex == NULL)
     {
@@ -808,14 +915,13 @@ void glplatTextureReplace(uintptr_t handle, const void* textureData, unsigned lo
         return;
 
     // PORT: big-endian in the file; the palette copy below is sized from it.
-    const u32 numEntries = port_be32(&pHeader->numEntries);
+    const u32 numEntries = port_be32((const u8*)textureData + 0x14);
 
     {
         // PORT: clamp to what the caller actually handed us.
         unsigned long wanted = GCTextureSize(pTex->m_Format, pTex->m_Width,
                                              pTex->m_Height, pTex->m_Levels, -1);
-        unsigned long avail = size > sizeof(GXTextureHeader)
-                                  ? size - sizeof(GXTextureHeader) : 0;
+        unsigned long avail = sourcePixelSize;
         if (wanted > avail)
             wanted = avail;
         memcpy(pTex->m_SwizzledData,
@@ -825,7 +931,7 @@ void glplatTextureReplace(uintptr_t handle, const void* textureData, unsigned lo
     if (numEntries != 0 && pTex->m_PaletteData != NULL)
     {
         const u8* src = (const u8*)textureData;
-        src += GCTextureSize(pTex->m_Format, pTex->m_Width, pTex->m_Height, pTex->m_Levels, -1);
+        src += sourcePixelSize;
         src += sizeof(GXTextureHeader);
 
         // PORT: clamp to the palette that was actually allocated.

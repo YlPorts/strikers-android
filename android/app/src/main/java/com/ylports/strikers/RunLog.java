@@ -47,8 +47,8 @@ public final class RunLog {
         }
         synchronized (LOCK) {
             try (FileOutputStream out = new FileOutputStream(file(context), append)) {
-                String line = SystemClock.elapsedRealtime()
-                        + "ms pid=" + Process.myPid()
+                String line = SystemClock.uptimeMillis()
+                        + "ms clock=monotonic pid=" + Process.myPid()
                         + " tid=" + Process.myTid()
                         + " " + message + "\n";
                 out.write(line.getBytes(StandardCharsets.UTF_8));

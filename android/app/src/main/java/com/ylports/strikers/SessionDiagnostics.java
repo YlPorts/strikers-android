@@ -23,6 +23,7 @@ final class SessionDiagnostics {
     static final String FILE_NAME = "session-performance.log";
     static final int MAX_FILE_BYTES = 32 * 1024;
     private static final long INTERVAL_MS = 10_000;
+    private static final String PROCESS_TAG = " pid=" + Process.myPid();
     private final Context context;
     private final Supplier<String> snapshot;
     private final HandlerThread thread;
@@ -74,7 +75,10 @@ final class SessionDiagnostics {
     static File file(Context context) { return new File(context.getFilesDir(), FILE_NAME); }
 
     static void append(Context context, String sample) {
-        byte[] bytes = (SystemClock.elapsedRealtime() + "ms " + sample + "\n").getBytes(StandardCharsets.UTF_8);
+        // Use the same sleep-excluding clock as native CLOCK_MONOTONIC. Include
+        // PID per sample because rotation/report tails can remove the header.
+        byte[] bytes = (SystemClock.uptimeMillis() + "ms clock=monotonic" + PROCESS_TAG
+                + " " + sample + "\n").getBytes(StandardCharsets.UTF_8);
         if (bytes.length > 2048) return;
         File file = file(context);
         // A rolling, bounded diagnostic file. No fsync or disk I/O on the UI/render/game threads.

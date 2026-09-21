@@ -94,6 +94,9 @@ jobs:
             -Ismstrikers-port/include android/tests/runtime_diagnostics_test.cpp smstrikers-port/src/platform/runtime_diagnostics.cpp \
             -o /tmp/runtime-diagnostics-test
           /tmp/runtime-diagnostics-test
+          cmake -S android/tests/texture_bundle -B /tmp/strikers-texture-bundle-test -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/strikers-texture-bundle-test --parallel 2
+          ctest --test-dir /tmp/strikers-texture-bundle-test --output-on-failure
           cmake -S android/tests/card -B /tmp/strikers-card-test -DCMAKE_BUILD_TYPE=Debug
           cmake --build /tmp/strikers-card-test --parallel 2
           ctest --test-dir /tmp/strikers-card-test --output-on-failure

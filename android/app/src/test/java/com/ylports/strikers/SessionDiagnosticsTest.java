@@ -24,6 +24,7 @@ public class SessionDiagnosticsTest {
         String text = new String(Files.readAllBytes(SessionDiagnostics.file(context).toPath()), StandardCharsets.UTF_8);
         assertTrue(text.contains("frame=1999"));
         assertFalse(text.contains("frame=0 "));
+        assertTrue(text.contains("clock=monotonic pid=" + android.os.Process.myPid()));
         SessionDiagnostics.append(context, "x".repeat(4096));
         assertEquals(text, new String(Files.readAllBytes(SessionDiagnostics.file(context).toPath()), StandardCharsets.UTF_8));
     }
