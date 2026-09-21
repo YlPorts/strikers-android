@@ -123,12 +123,11 @@ public final class GameBootstrapActivity extends Activity {
 
             String graphics = GraphicsSettings.applyEnvironment(getIntent(), prefs);
             DriverRuntime.prepare(this, getIntent().getStringExtra(DriverRuntime.EXTRA_DRIVER));
-            android.app.ActivityManager manager = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
-            android.app.ActivityManager.MemoryInfo memory = new android.app.ActivityManager.MemoryInfo();
-            if (manager != null) manager.getMemoryInfo(memory);
-            boolean preconvert = manager != null && !manager.isLowRamDevice() && memory.totalMem >= 3L * 1024 * 1024 * 1024;
-            Os.setenv("AURORA_TEX_PRECONVERT", preconvert ? "1" : "0", true);
-            RunLog.append(this, "graphics: bounded texture preparation=" + preconvert);
+            // Speculative copies/conversion can compete with a draw's mandatory
+            // conversion and retain unused data. RAM size alone did not establish
+            // a benefit on phones; use the normal content cache on every device.
+            Os.setenv("AURORA_TEX_PRECONVERT", "0", true);
+            RunLog.append(this, "graphics: texture preparation=on demand; CPU affinity=Android scheduler");
             // A fast panel does not automatically double rendering workload.
             // Keep 120 available by choice; the simulation retains its own clock.
             int requestedFps = getIntent().getIntExtra(EXTRA_TARGET_FPS,

@@ -42,7 +42,9 @@ public final class StrikersActivity extends SDLActivity
     private boolean resumed;
     private Handler uiHandler;
     private TextView performanceView;
+    private SessionDiagnostics sessionDiagnostics;
     private static native float nativePresentedFps();
+    private static native String nativeRuntimeSnapshot();
     private final Runnable performanceRunnable = new Runnable() {
         @Override public void run() {
             if (!resumed || performanceView == null || mBrokenLibraries || isFinishing()) return;
@@ -90,6 +92,7 @@ public final class StrikersActivity extends SDLActivity
         if (mBrokenLibraries) return;
 
         uiHandler = new Handler(Looper.getMainLooper());
+        sessionDiagnostics = new SessionDiagnostics(this, StrikersActivity::nativeRuntimeSnapshot);
         if (getIntent().getBooleanExtra(GraphicsSettings.STATS, false)) {
             performanceView = new TextView(this);
             performanceView.setTextColor(Color.WHITE);
@@ -131,6 +134,7 @@ public final class StrikersActivity extends SDLActivity
         super.onResume();
         if (mBrokenLibraries) return;
         resumed = true;
+        if (sessionDiagnostics != null) sessionDiagnostics.setResumed(true);
         if (uiHandler != null && performanceView != null) {
             uiHandler.removeCallbacks(performanceRunnable);
             uiHandler.post(performanceRunnable);
@@ -176,6 +180,7 @@ public final class StrikersActivity extends SDLActivity
     @Override
     protected void onPause() {
         resumed = false;
+        if (sessionDiagnostics != null) sessionDiagnostics.setResumed(false);
         cancelOverlayCallbacks();
         if (touchController != null) {
             touchController.releaseAll();
@@ -194,6 +199,10 @@ public final class StrikersActivity extends SDLActivity
     @Override
     protected void onDestroy() {
         resumed = false;
+        if (sessionDiagnostics != null) {
+            sessionDiagnostics.stop();
+            sessionDiagnostics = null;
+        }
         cancelOverlayCallbacks();
         if (inputManager != null) {
             inputManager.unregisterInputDeviceListener(this);

@@ -151,6 +151,7 @@ if (AURORA_ENABLE_GX)
   gtest_discover_tests(texture_replacement_streaming_tests)
 
   add_executable(render_worker_tests
+    idle_cache_test.cpp
     render_worker_test.cpp
     thread_test.cpp
     ../lib/gfx/render_worker.cpp

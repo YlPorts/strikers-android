@@ -22,6 +22,7 @@ public class CrashReportTest {
         Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
         RunLog.reset(activity, "[session] match=3 cleanup complete");
         RunLog.append(activity, "[memdiag] rss=512000KB");
+        SessionDiagnostics.append(activity, "frame=24000 phase=2 present_age_ms=12000");
         CrashReport.showLatest(activity);
         AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
         assertNotNull(dialog);
@@ -31,6 +32,7 @@ public class CrashReportTest {
         String text = clipboard.getPrimaryClip().getItemAt(0).getText().toString();
         assertTrue(text.contains("match=3 cleanup complete"));
         assertTrue(text.contains("rss=512000KB"));
+        assertTrue(text.contains("frame=24000 phase=2 present_age_ms=12000"));
         assertTrue(text.contains("dispositivo:"));
         assertTrue(text.contains("version:"));
         assertFalse(text.contains("diagnostico: CRASH_NATIVE"));

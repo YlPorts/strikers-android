@@ -43,6 +43,7 @@ public:
   explicit BoundedQueue(size_t capacity);
 
   bool push(QueueItem item);
+  std::optional<QueueItem> pop();
   std::optional<QueueItem> pop_for(std::chrono::milliseconds timeout, bool& closed);
   void close();
   void reset();
@@ -85,5 +86,7 @@ void synchronize();
 
 bool is_worker_thread() noexcept;
 bool is_idle() noexcept;
+// Lock-free diagnostic snapshot: zero when idle, otherwise (frameId << 8) | (type + 1).
+uint64_t progress() noexcept;
 
 } // namespace aurora::gfx::render_worker

@@ -30,6 +30,8 @@ typedef struct {
 
 const AuroraStats* aurora_get_stats();
 float aurora_get_fps();
+// Non-blocking, bounded text snapshot for Android's background session report.
+void aurora_format_runtime_diagnostics(char* buffer, uint32_t capacity);
 
 void aurora_enable_vsync(bool enabled);
 

@@ -1,4 +1,6 @@
 #include "pipeline_cache.hpp"
+#include "idle_cache.hpp"
+#include "runtime_metrics.hpp"
 #include "wait_with_progress.hpp"
 
 #include "clear.hpp"
@@ -38,6 +40,7 @@ constexpr const char* SdlVfsName = "aurora_pipeline_cache_sdl_vfs";
 struct CachedPipeline {
   wgpu::RenderPipeline pipeline;
   uint32_t firstFrameUsed = UINT32_MAX;
+  uint32_t lastUsedFrame = 0;
 };
 
 struct PendingPipeline {
@@ -435,6 +438,7 @@ static void notify_pipeline_ready(bool queued) {
 }
 
 static PipelineRef g_lastPipelineRef = std::numeric_limits<PipelineRef>::max();
+static uint32_t g_lastPipelineFrame = UINT32_MAX;
 
 template <typename PipelineConfig>
 static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& config, NewPipelineCallback&& cb,
@@ -444,10 +448,12 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
 
   const PipelineRef hash = xxh3_hash(config, static_cast<HashType>(type));
   const bool blocking = priority == PipelinePriority::Blocking;
-  if (!blocking && hash == g_lastPipelineRef) {
+  const uint32_t frame = current_frame();
+  if (!blocking && hash == g_lastPipelineRef && frame == g_lastPipelineFrame) {
     return g_lastPipelineRef;
   }
   g_lastPipelineRef = hash;
+  g_lastPipelineFrame = frame;
   const uint32_t firstFrameUsed = firstFrameUsedOverride.value_or(current_frame());
   bool notifyWorker = false;
   bool persist = priority != PipelinePriority::Background;
@@ -460,6 +466,7 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
     auto pipelineIt = g_pipelines.find(hash);
     if (pipelineIt != g_pipelines.end()) {
       pipelineReady = true;
+      pipelineIt->second.lastUsedFrame = frame;
       if (persist && firstFrameUsed < pipelineIt->second.firstFrameUsed) {
         pipelineIt->second.firstFrameUsed = firstFrameUsed;
         cacheWrite = make_pipeline_cache_write(type, hash, config, firstFrameUsed);
@@ -477,6 +484,7 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
           g_pipelines.try_emplace(hash, CachedPipeline{
                                             .pipeline = pending->create(),
                                             .firstFrameUsed = pending->firstFrameUsed,
+                                            .lastUsedFrame = frame,
                                         });
           pipelineReady = true;
           ++g_pipelinesPerFrame;
@@ -499,6 +507,7 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
       g_pipelines.try_emplace(hash, CachedPipeline{
                                         .pipeline = cb(),
                                         .firstFrameUsed = firstFrameUsed,
+                                        .lastUsedFrame = frame,
                                     });
       pipelineReady = true;
       if (persist) {
@@ -996,14 +1005,18 @@ static void pipeline_worker() {
       pending = std::move(source.front());
       source.pop_front();
     }
+    runtime_metrics::compilingPipeline.store(pending.hash, std::memory_order_relaxed);
     auto result = pending.create();
+    runtime_metrics::compilingPipeline.store(0, std::memory_order_relaxed);
     {
       std::lock_guard lock{g_pipelineMutex};
       g_pipelines.try_emplace(pending.hash, CachedPipeline{
                                                 .pipeline = std::move(result),
                                                 .firstFrameUsed = pending.firstFrameUsed,
+                                                .lastUsedFrame = current_frame(),
                                             });
       g_pendingPipelines.erase(pending.hash);
+      runtime_metrics::pipelineCount.store(g_pipelines.size(), std::memory_order_relaxed);
       hasMore = !g_pipelineQueue.empty() || !g_backgroundPipelineQueue.empty();
     }
     if (!g_hasPipelineThread) {
@@ -1143,6 +1156,7 @@ PipelineRef find_pipeline(ShaderType type, const rmlui::PipelineConfig& config, 
 
 void initialize_pipeline_cache() {
   g_lastPipelineRef = std::numeric_limits<PipelineRef>::max();
+  g_lastPipelineFrame = UINT32_MAX;
   g_pipelineCacheBroken = false;
   g_pipelineCacheWriterStop = false;
   g_pipelineThreadEnd = false;
@@ -1183,6 +1197,7 @@ void shutdown_pipeline_cache() {
   g_pipelinesPerFrame = 0;
   g_gpuCachePrunePending = false;
   g_pipelines.clear();
+  runtime_metrics::pipelineCount.store(0, std::memory_order_relaxed);
   g_pipelineQueue.clear();
   g_backgroundPipelineQueue.clear();
   g_pendingPipelines.clear();
@@ -1192,6 +1207,16 @@ void shutdown_pipeline_cache() {
 }
 
 void begin_pipeline_frame() {
+#ifdef __ANDROID__
+  // Long sessions otherwise keep every compiled variant alive until process exit.
+  // Rebuild cold entries on demand through Dawn's existing disk cache. Never
+  // remove pipelines used by current/queued frames (two frame slots).
+  if (current_frame() % 120 == 0) {
+    std::lock_guard lock{g_pipelineMutex};
+    detail::trim_idle_cache(g_pipelines, 1024, current_frame(), 600);
+    runtime_metrics::pipelineCount.store(g_pipelines.size(), std::memory_order_relaxed);
+  }
+#endif
   if (!g_hasPipelineThread) {
     g_pipelinesPerFrame = 0;
   }
@@ -1211,6 +1236,7 @@ bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline) {
     g_pipelineQueueCv.notify_one();
     const auto started = std::chrono::steady_clock::now();
     bool reported = false;
+    runtime_metrics::waitingPipeline.store(ref, std::memory_order_relaxed);
     detail::wait_with_progress(g_pipelineReadyCv, guard,
         [=] { return g_pipelines.contains(ref) || g_pipelineThreadEnd; }, [&] {
           if (webgpu::g_instance) webgpu::g_instance.ProcessEvents();
@@ -1219,6 +1245,7 @@ bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline) {
             reported = true;
           }
         });
+    runtime_metrics::waitingPipeline.store(0, std::memory_order_relaxed);
     if (reported) {
       Log.warn("Effect pipeline {:x} wait ended after {} ms", ref,
                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
@@ -1230,6 +1257,7 @@ bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline) {
     return false;
   }
   pipeline = it->second.pipeline;
+  it->second.lastUsedFrame = current_frame();
   return true;
 }
 

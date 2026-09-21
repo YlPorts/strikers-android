@@ -290,9 +290,14 @@ void set_current(const Options& options) noexcept {
   }
 
   SDL_SetCurrentThreadPriority(to_sdl_priority(options.priority));
+#if !defined(__ANDROID__)
+  // Android's scheduler knows CPU capacity and thermal constraints. A shared
+  // cache chosen from the startup CPU can be just one LITTLE core/cluster,
+  // pinning the main, FIFO and render threads there for the entire session.
   if (options.affinity == Affinity::SharedCache) {
     pin_shared_cache();
   }
+#endif
 }
 
 } // namespace aurora::thread

@@ -164,7 +164,9 @@ final class CrashReport {
                 out.append('\n');
             }
         }
-        out.append("=== fin del informe ===\n");
+        out.append("=== session-performance.log (cola) ===\n");
+        out.append(readTail(SessionDiagnostics.file(context), 12 * 1024));
+        out.append("\n=== fin del informe ===\n");
         return out.toString();
     }
 

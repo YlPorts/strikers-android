@@ -4,6 +4,7 @@
 #include "pipeline_cache.hpp"
 #include "recording.hpp"
 #include "render_worker.hpp"
+#include "runtime_metrics.hpp"
 #include "resource_cache.hpp"
 #include "tex_copy_conv.hpp"
 #include "tex_palette_conv.hpp"
@@ -51,7 +52,7 @@ enum class BufferMapState {
 
 std::array<wgpu::Buffer, StagingBufferCount> g_stagingBuffers;
 std::array<std::atomic<BufferMapState>, StagingBufferCount> g_mappingStates;
-uint32_t g_frameIndex = UINT32_MAX;
+std::atomic_uint32_t g_frameIndex = UINT32_MAX;
 
 std::array<FramePacket, FrameSlotCount> g_framePackets;
 uint64_t g_nextFrameId = 1;
@@ -615,17 +616,20 @@ std::optional<size_t> acquire_mapped_staging_buffer() {
 bool begin_frame() {
   ZoneScoped;
   // pace_frame_start();
+  runtime_metrics::framePhase.store(1, std::memory_order_relaxed);
   const size_t frameSlot = acquire_frame_slot();
+  runtime_metrics::framePhase.store(2, std::memory_order_relaxed);
   const auto stagingSlot = acquire_mapped_staging_buffer();
   if (!stagingSlot) {
     g_frameSlots.release(frameSlot);
+    runtime_metrics::framePhase.store(0, std::memory_order_relaxed);
     return false;
   }
 
   auto& frame = g_framePackets[frameSlot];
   frame = {};
   frame.frameId = g_nextFrameId++;
-  frame.frameIndex = g_frameIndex;
+  frame.frameIndex = current_frame();
   frame.stagingBuffer = *stagingSlot;
   size_t bufferOffset = 0;
   const auto& stagingBuf = g_stagingBuffers[*stagingSlot];
@@ -652,6 +656,7 @@ bool begin_frame() {
     webgpu::gpu_prof::frame_begin(g_framePackets[frameSlot].encoder);
   });
   g_cpuFrameStart = PresentClock::now();
+  runtime_metrics::framePhase.store(3, std::memory_order_relaxed);
   return true;
 }
 
@@ -694,9 +699,10 @@ void end_frame(EndFrameCallback callback) {
     map_staging_buffer(stagingSlot, true);
     process_events();
   });
+  runtime_metrics::framePhase.store(0, std::memory_order_relaxed);
 }
 
-uint32_t current_frame() noexcept { return g_frameIndex; }
+uint32_t current_frame() noexcept { return g_frameIndex.load(std::memory_order_relaxed); }
 
 void after_submit() noexcept { depth_peek::after_submit(); }
 
@@ -741,7 +747,24 @@ float calculate_fps() noexcept {
   }
   return static_cast<float>(g_presentTimes.size() - 1) / elapsed;
 }
+
+void format_runtime_diagnostics(char* buffer, uint32_t capacity) {
+  if (!buffer || capacity == 0) return;
+  const int64_t lastPresent = g_lastPresentNs.load(std::memory_order_relaxed);
+  const int64_t presentAge = lastPresent ? (timestamp_ns(PresentClock::now()) - lastPresent) / 1'000'000 : -1;
+  std::snprintf(buffer, capacity,
+      "frame=%u phase=%u render=%llu present_age_ms=%lld pipelines=%u samplers=%u compiling=%llx waiting=%llx",
+      current_frame(), runtime_metrics::framePhase.load(std::memory_order_relaxed),
+      static_cast<unsigned long long>(render_worker::progress()), static_cast<long long>(presentAge),
+      runtime_metrics::pipelineCount.load(std::memory_order_relaxed),
+      runtime_metrics::samplerCount.load(std::memory_order_relaxed),
+      static_cast<unsigned long long>(runtime_metrics::compilingPipeline.load(std::memory_order_relaxed)),
+      static_cast<unsigned long long>(runtime_metrics::waitingPipeline.load(std::memory_order_relaxed)));
+}
 } // namespace aurora::gfx
 
 const AuroraStats* aurora_get_stats() { return &aurora::gfx::detail::resources().stats; }
 float aurora_get_fps() { return aurora::gfx::calculate_fps(); }
+void aurora_format_runtime_diagnostics(char* buffer, uint32_t capacity) {
+  aurora::gfx::format_runtime_diagnostics(buffer, capacity);
+}
