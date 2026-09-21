@@ -24,6 +24,7 @@ extern "C" void PortDebugFrame(void);   // PORT: defined in Game.cpp
 #include "port/audio.h"
 #include "port/determinism.h"
 #include "port/config.h"
+#include "port/runtime_diagnostics.h"
 #include "Game/Audio/AudioStream.h"
 #include "Game/Sys/audio.h"
 #include "Game/Sys/clock.h"
@@ -831,28 +832,36 @@ int main(int argc, char* argv[])
 #if defined(PORT_USE_AURORA)
     while (s_portRunning && !PortQuitRequested())
     {
+        PortDiagnosticStage(PORT_GAME_EVENTS);
         PortPumpAuroraEvents();
         PortUpdateSyntheticInput(s_portFrame);
         PortDebugFrame();
 
+        PortDiagnosticStage(PORT_GAME_BEGIN_FRAME);
         if (!aurora_begin_frame())
             continue;              // minimised or surface lost; nothing to draw
 
         PortBenchFrameBegin();
 
         // Sample the pad before the tasks that read it. main() registers VBlankPadUpdate through PADSetSamplingCallback.
+        PortDiagnosticStage(PORT_GAME_PAD);
         PortInvokePadSamplingCallback();
 
+        PortDiagnosticStage(PORT_GAME_TASKS);
         nlTaskManager::RunAllTasks();
+        PortDiagnosticStage(PORT_GAME_PROFILE);
         UpdateProfile();
         PortBenchAfterTasks();
 
         // PORT: the audio clock. MusyX runs only inside this call; see include/port/audio.h.
+        PortDiagnosticStage(PORT_GAME_AUDIO);
         PortAudioUpdate();
 
         // PORT: Between begin_frame and end_frame, which is the window in which Aurora's ImGui frame is open.
+        PortDiagnosticStage(PORT_GAME_OVERLAY);
         PortOverlayDraw();
 
+        PortDiagnosticStage(PORT_GAME_CAPTURE);
         PortMaybeRequestCapture();
         // PORT: STRIKERS_CAPTURE_EVERY, a shot every N frames, so a long run can be watched rather than sampled once.
         {
@@ -870,9 +879,12 @@ int main(int argc, char* argv[])
                 PortRequestManualShot();
             }
         }
+        PortDiagnosticStage(PORT_GAME_END_FRAME);
         aurora_end_frame();
+        PortDiagnosticStage(PORT_GAME_FINISH_FRAME);
         PortBenchFrameEnd();
         s_portFrame++;
+        PortDiagnosticStage(PORT_GAME_IDLE);
 
         // Stop on the benchmark's own clock rather than a frame count: the question is always "how did it behave over N seconds".
         if (PortBenchRunSeconds() > 0.0

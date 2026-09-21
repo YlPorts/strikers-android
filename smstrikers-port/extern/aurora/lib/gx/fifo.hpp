@@ -120,6 +120,13 @@ const DisplayListSplice* find_display_list(uint64_t streamPos) noexcept;
 // Ensure all buffered commands have been processed.
 void drain();
 
+struct RuntimeProgress {
+  uint64_t published, processed, drainTarget;
+  uint32_t stage; // 0 idle, 1 buffer lock, 2 processing commands, 3 draw-done callback
+};
+// Atomic-only: safe to sample even when the producer/consumer is blocked.
+RuntimeProgress runtime_progress() noexcept;
+
 // Internal buffer inspection
 const uint8_t* get_buffer_data();
 uint32_t get_buffer_size();

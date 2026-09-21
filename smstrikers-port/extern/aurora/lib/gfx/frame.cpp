@@ -5,6 +5,7 @@
 #include "recording.hpp"
 #include "render_worker.hpp"
 #include "runtime_metrics.hpp"
+#include "../gx/fifo.hpp"
 #include "resource_cache.hpp"
 #include "tex_copy_conv.hpp"
 #include "tex_palette_conv.hpp"
@@ -752,14 +753,18 @@ void format_runtime_diagnostics(char* buffer, uint32_t capacity) {
   if (!buffer || capacity == 0) return;
   const int64_t lastPresent = g_lastPresentNs.load(std::memory_order_relaxed);
   const int64_t presentAge = lastPresent ? (timestamp_ns(PresentClock::now()) - lastPresent) / 1'000'000 : -1;
+  const auto fifo = gx::fifo::runtime_progress();
   std::snprintf(buffer, capacity,
-      "frame=%u phase=%u render=%llu present_age_ms=%lld pipelines=%u samplers=%u compiling=%llx waiting=%llx",
+      "frame=%u phase=%u render=%llu present_age_ms=%lld pipelines=%u samplers=%u compiling=%llx waiting=%llx "
+      "fifo_published=%llu fifo_processed=%llu fifo_drain=%llu fifo_stage=%u",
       current_frame(), runtime_metrics::framePhase.load(std::memory_order_relaxed),
       static_cast<unsigned long long>(render_worker::progress()), static_cast<long long>(presentAge),
       runtime_metrics::pipelineCount.load(std::memory_order_relaxed),
       runtime_metrics::samplerCount.load(std::memory_order_relaxed),
       static_cast<unsigned long long>(runtime_metrics::compilingPipeline.load(std::memory_order_relaxed)),
-      static_cast<unsigned long long>(runtime_metrics::waitingPipeline.load(std::memory_order_relaxed)));
+      static_cast<unsigned long long>(runtime_metrics::waitingPipeline.load(std::memory_order_relaxed)),
+      static_cast<unsigned long long>(fifo.published), static_cast<unsigned long long>(fifo.processed),
+      static_cast<unsigned long long>(fifo.drainTarget), fifo.stage);
 }
 } // namespace aurora::gfx
 

@@ -10,6 +10,7 @@
 #include "gfx/frame.hpp"
 #include "gfx/recording.hpp"
 #include "gfx/render_worker.hpp"
+#include "gfx/runtime_metrics.hpp"
 #include "gx/command_processor.hpp"
 #include "gx/fifo.hpp"
 #include "gx/gx.hpp"
@@ -396,10 +397,14 @@ bool begin_frame() noexcept {
 void end_frame() noexcept {
   ZoneScoped;
 #ifdef AURORA_ENABLE_GX
+  gfx::runtime_metrics::framePhase.store(4, std::memory_order_relaxed);
   gx::fifo::drain();
+  gfx::runtime_metrics::framePhase.store(5, std::memory_order_relaxed);
   gx::fifo::end_frame();
   gx::texture::end_frame();
+  gfx::runtime_metrics::framePhase.store(6, std::memory_order_relaxed);
   gfx::finish();
+  gfx::runtime_metrics::framePhase.store(7, std::memory_order_relaxed);
   auto imguiDrawData = imgui::freeze();
 
   const auto& presentSource = webgpu::present_source();
@@ -417,6 +422,7 @@ void end_frame() noexcept {
   }
 #endif
 
+  gfx::runtime_metrics::framePhase.store(8, std::memory_order_relaxed);
   gfx::end_frame([rmlBindGroup = std::move(rmlBindGroup), rmlOverlay, viewport,
                   imguiDrawData = std::move(imguiDrawData)](
                      wgpu::CommandEncoder& encoder, std::vector<gfx::AfterSubmitCallback> afterSubmitCallbacks) {

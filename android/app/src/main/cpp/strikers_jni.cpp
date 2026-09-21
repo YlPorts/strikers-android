@@ -13,6 +13,7 @@
 #include <aurora/gfx.h>
 
 #include "port/disc.h"
+#include "port/runtime_diagnostics.h"
 #include "touch_state.h"
 
 namespace {
@@ -123,8 +124,12 @@ Java_com_ylports_strikers_StrikersActivity_nativePresentedFps(JNIEnv*, jclass) {
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_ylports_strikers_StrikersActivity_nativeRuntimeSnapshot(JNIEnv* env, jclass) {
     char sample[512];
+    char game[256];
     aurora_format_runtime_diagnostics(sample, sizeof(sample));
-    return env->NewStringUTF(sample);
+    PortFormatGameDiagnostics(game, sizeof(game));
+    char combined[sizeof(sample) + sizeof(game)];
+    snprintf(combined, sizeof(combined), "%s %s", sample, game);
+    return env->NewStringUTF(combined);
 }
 
 extern "C" JNIEXPORT void JNICALL

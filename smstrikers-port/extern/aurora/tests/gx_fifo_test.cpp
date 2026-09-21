@@ -293,10 +293,20 @@ TEST_F(GXFifoTest, DrainWaitsForDrawDoneCallbackToReturn) {
   std::this_thread::sleep_for(std::chrono::milliseconds{10});
   EXPECT_FALSE(drainReturned.load(std::memory_order_acquire));
 
+  // A diagnostic query must return even while a callback prevents drain from
+  // completing. It must identify the outstanding work, not block on that work.
+  const auto blocked = aurora::gx::fifo::runtime_progress();
+  EXPECT_EQ(blocked.stage, 3u);
+  EXPECT_GT(blocked.published, blocked.processed);
+  EXPECT_EQ(blocked.drainTarget, blocked.published);
+
   sBlockingCallbackMayReturn.store(true, std::memory_order_release);
   EXPECT_TRUE(wait_for(drainReturned, true));
   drainThread.join();
   EXPECT_TRUE(sBlockingCallbackReturned.load(std::memory_order_acquire));
+  const auto completed = aurora::gx::fifo::runtime_progress();
+  EXPECT_EQ(completed.published, completed.processed);
+  EXPECT_EQ(completed.drainTarget, 0u);
 
   GXSetDrawDoneCallback(nullptr);
   aurora::gx::fifo::end_frame();
@@ -316,6 +326,25 @@ TEST_F(GXFifoTest, AuroraSyncGXProcessesTailWithoutDrawDoneCallback) {
   EXPECT_EQ(g_gxState.bpRegCache[0x41], 0x410A0B0Cu);
   EXPECT_FALSE(sDrawDoneCallbackCalled.load(std::memory_order_acquire));
   GXSetDrawDoneCallback(nullptr);
+  aurora::gx::fifo::end_frame();
+}
+
+TEST_F(GXFifoTest, ProducerCanGrowWhileWorkerConsumesPublishedPrefix) {
+  aurora::gx::fifo::init();
+  aurora::gx::fifo::begin_frame();
+  constexpr uint32_t commands = 100000;
+  for (uint32_t i = 0; i < commands; ++i) {
+    const std::array<u8, 5> command{GX_LOAD_BP_REG, 0x41, u8(i >> 16), u8(i >> 8), u8(i)};
+    aurora::gx::fifo::write_data(command.data(), command.size());
+    if (i % 16 == 0) aurora::gx::fifo::publish();
+  }
+  aurora::gx::fifo::drain();
+  EXPECT_EQ(g_gxState.bpRegCache[0x41], 0x41000000u | (commands - 1));
+  EXPECT_GE(aurora::gx::fifo::detail::sBufferCapacity, commands * 5);
+  const auto progress = aurora::gx::fifo::runtime_progress();
+  EXPECT_EQ(progress.published, commands * 5);
+  EXPECT_EQ(progress.processed, progress.published);
+  EXPECT_EQ(progress.drainTarget, 0u);
   aurora::gx::fifo::end_frame();
 }
 

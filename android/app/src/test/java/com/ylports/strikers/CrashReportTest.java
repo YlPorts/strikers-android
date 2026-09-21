@@ -18,13 +18,24 @@ import static org.robolectric.Shadows.shadowOf;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {26, 35}, application = Application.class)
 public class CrashReportTest {
-    @Test public void latestSessionCanBeCopiedWithoutASystemCrashRecord() {
+    private static AlertDialog awaitDialog() throws Exception {
+        long deadline = System.nanoTime() + 5_000_000_000L;
+        do {
+            shadowOf(Looper.getMainLooper()).idle();
+            AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
+            if (dialog != null && dialog.isShowing()) return dialog;
+            Thread.sleep(5);
+        } while (System.nanoTime() < deadline);
+        throw new AssertionError("Report reader did not display a dialog");
+    }
+
+    @Test public void latestSessionCanBeCopiedWithoutASystemCrashRecord() throws Exception {
         Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
         RunLog.reset(activity, "[session] match=3 cleanup complete");
         RunLog.append(activity, "[memdiag] rss=512000KB");
         SessionDiagnostics.append(activity, "frame=24000 phase=2 present_age_ms=12000");
         CrashReport.showLatest(activity);
-        AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
+        AlertDialog dialog = awaitDialog();
         assertNotNull(dialog);
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
         shadowOf(Looper.getMainLooper()).idle();
@@ -34,16 +45,17 @@ public class CrashReportTest {
         assertTrue(text.contains("rss=512000KB"));
         assertTrue(text.contains("frame=24000 phase=2 present_age_ms=12000"));
         assertTrue(text.contains("dispositivo:"));
-        assertTrue(text.contains("version:"));
+        assertTrue(text.contains("version del informe:"));
+        assertTrue(text.contains("session_version="));
         assertFalse(text.contains("diagnostico: CRASH_NATIVE"));
         dialog.dismiss();
     }
 
-    @Test public void missingLogStillProducesAReport() {
+    @Test public void missingLogStillProducesAReport() throws Exception {
         Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
         RunLog.file(activity).delete();
         CrashReport.showLatest(activity);
-        AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
+        AlertDialog dialog = awaitDialog();
         assertNotNull(dialog);
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
         shadowOf(Looper.getMainLooper()).idle();

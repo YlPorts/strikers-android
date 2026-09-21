@@ -39,8 +39,11 @@ final class SessionDiagnostics {
         handler.post(() -> {
             try (FileOutputStream out = new FileOutputStream(file(this.context))) {
                 out.write(("pid=" + Process.myPid() + " device=" + Build.MODEL
-                        + " phase: 0=between frames, 1=frame slot, 2=staging, 3=recording\n"
-                        + "render: (frame_id << 8) | stage; 0=idle, 1=begin, 2=draw, 3=submit, 4=sync\n")
+                        + " version=" + RunLog.version(this.context)
+                        + " phase: 0=between frames, 1=frame slot, 2=staging, 3=recording, 4=FIFO drain,"
+                        + " 5=cleanup, 6=finish, 7=overlay, 8=enqueue\n"
+                        + "render: (frame_id << 8) | stage; 0=idle, 1=begin, 2=draw, 3=submit, 4=sync\n"
+                        + "fifo_stage: 0=idle, 1=buffer lock, 2=commands, 3=draw-done callback\n")
                         .getBytes(StandardCharsets.UTF_8));
             } catch (IOException ignored) { }
             sample.run();

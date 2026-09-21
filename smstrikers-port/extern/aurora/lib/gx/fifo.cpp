@@ -32,6 +32,8 @@ bool sFrameActive = false;
 uint32_t sPendingDraws = 0;
 std::atomic<uint64_t> sPublished{0};
 std::atomic<uint64_t> sProcessed{0};
+std::atomic<uint64_t> sDrainTarget{0};
+std::atomic<uint32_t> sWorkerStage{0};
 uint64_t sStreamBase = 0;
 std::mutex sBufferMutex;
 std::atomic<uint32_t> sWorkerWake{0};
@@ -59,26 +61,34 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
   while (processed < target) {
     ProcessResult result{};
     {
+      sWorkerStage.store(1, std::memory_order_relaxed);
       std::lock_guard lock{sBufferMutex};
-      AURORA_ASSERT(processed >= sStreamBase && target <= sStreamBase + detail::sBufferSize,
-                    "FIFO processing range [{}, {}) is outside buffered range [{}, {})", processed, target, sStreamBase,
-                    sStreamBase + detail::sBufferSize);
+      // The producer keeps appending to sBufferSize without this mutex. Reading
+      // it here was a data race even though it was only used by the assertion.
+      // The release-published target defines the initialized prefix; capacity
+      // and the allocation itself are protected by sBufferMutex.
+      AURORA_ASSERT(processed >= sStreamBase && target <= sStreamBase + detail::sBufferCapacity,
+                    "FIFO processing range [{}, {}) is outside allocation [{}, {})", processed, target, sStreamBase,
+                    sStreamBase + detail::sBufferCapacity);
       const auto start = static_cast<uint32_t>(processed - sStreamBase);
       const auto size = static_cast<uint32_t>(target - processed);
       // smstrikers-port: `processed` turns a chunk-relative offset into a stream
       // position, and so into a display list.
+      sWorkerStage.store(2, std::memory_order_relaxed);
       result = process(detail::sBufferData + start, size, processed);
     }
     AURORA_ASSERT(result.bytesProcessed > 0 && result.bytesProcessed <= target - processed,
                   "FIFO processor made invalid progress: processed {} of {} remaining bytes", result.bytesProcessed,
                   target - processed);
     if (result.drawDone) {
+      sWorkerStage.store(3, std::memory_order_relaxed);
       dispatch_draw_done();
     }
     processed += result.bytesProcessed;
     sProcessed.store(processed, order);
     sProcessed.notify_all();
   }
+  sWorkerStage.store(0, std::memory_order_relaxed);
 }
 
 void worker_main(std::stop_token token) noexcept {
@@ -142,6 +152,8 @@ void init() {
   sStreamBase = 0;
   sPublished.store(0, std::memory_order_relaxed);
   sProcessed.store(0, std::memory_order_relaxed);
+  sDrainTarget.store(0, std::memory_order_relaxed);
+  sWorkerStage.store(0, std::memory_order_relaxed);
   sWorkerWake.store(0, std::memory_order_relaxed);
 
   start_worker();
@@ -167,6 +179,7 @@ void write_data_grow(const void* data, uint32_t length) {
     auto* resized = static_cast<uint8_t*>(realloc(detail::sBufferData, newCapacity));
     AURORA_ASSERT(resized != nullptr, "fifo::write_data: failed to allocate {} bytes", newCapacity);
     detail::sBufferData = resized;
+    detail::sBufferCapacity = newCapacity;
   };
   if (sWorkerThread.joinable()) {
     std::lock_guard lock{sBufferMutex};
@@ -176,7 +189,6 @@ void write_data_grow(const void* data, uint32_t length) {
   }
   std::memcpy(detail::sBufferData + detail::sBufferSize, data, length);
   detail::sBufferSize = needed;
-  detail::sBufferCapacity = newCapacity;
 }
 
 void publish() noexcept {
@@ -274,6 +286,7 @@ void drain() {
   ZoneScoped;
   const uint64_t target = sStreamBase + detail::sBufferSize;
 
+  sDrainTarget.store(target, std::memory_order_relaxed);
   switch (kProcessingMode) {
   case ProcessingMode::Drain:
   case ProcessingMode::Inline:
@@ -301,6 +314,12 @@ void drain() {
     detail::sBufferSize = 0;
   }
   sPendingDraws = 0;
+  sDrainTarget.store(0, std::memory_order_relaxed);
+}
+
+RuntimeProgress runtime_progress() noexcept {
+  return {sPublished.load(std::memory_order_relaxed), sProcessed.load(std::memory_order_relaxed),
+          sDrainTarget.load(std::memory_order_relaxed), sWorkerStage.load(std::memory_order_relaxed)};
 }
 
 const uint8_t* get_buffer_data() { return detail::sBufferData; }

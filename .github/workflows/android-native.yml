@@ -88,6 +88,12 @@ jobs:
           /tmp/save-documents-test
           g++ -std=c++20 -Wall -Wextra -Werror -pthread -fsanitize=undefined android/tests/pipeline_wait_test.cpp -o /tmp/pipeline-wait-test
           /tmp/pipeline-wait-test
+          g++ -std=c++17 -Wall -Wextra -Werror -pthread -fsanitize=undefined android/tests/crash_capture_test.cpp -o /tmp/crash-capture-test
+          /tmp/crash-capture-test
+          g++ -std=c++11 -DSTRIKERS_DIAGNOSTICS_TEST -Wall -Wextra -Werror -pthread -fsanitize=undefined \
+            -Ismstrikers-port/include android/tests/runtime_diagnostics_test.cpp smstrikers-port/src/platform/runtime_diagnostics.cpp \
+            -o /tmp/runtime-diagnostics-test
+          /tmp/runtime-diagnostics-test
           cmake -S android/tests/card -B /tmp/strikers-card-test -DCMAKE_BUILD_TYPE=Debug
           cmake --build /tmp/strikers-card-test --parallel 2
           ctest --test-dir /tmp/strikers-card-test --output-on-failure

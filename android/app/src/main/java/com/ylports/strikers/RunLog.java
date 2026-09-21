@@ -25,7 +25,16 @@ public final class RunLog {
     }
 
     public static void reset(Context context, String message) {
-        write(context, message, false);
+        write(context, "session_version=" + version(context) + " " + message, false);
+    }
+
+    static String version(Context context) {
+        if (context == null) return "unknown";
+        try {
+            return context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName;
+        } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
+            return "unknown";
+        }
     }
 
     public static void append(Context context, String message) {
