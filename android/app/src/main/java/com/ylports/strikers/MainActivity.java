@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.net.ConnectivityManager;
 import android.net.LinkAddress;
@@ -104,7 +105,7 @@ public final class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(28), dp(38), dp(28), dp(32));
+        root.setPadding(dp(20), dp(22), dp(20), dp(24));
         scroll.addView(root, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT));
@@ -112,26 +113,104 @@ public final class MainActivity extends Activity {
         TextView title = new TextView(this);
         title.setText("Strikers Android");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(30f);
+        title.setTextSize(28f);
         title.setGravity(Gravity.CENTER);
-        title.setPadding(0, 0, 0, dp(26));
+        title.setPadding(0, 0, 0, dp(3));
         root.addView(title, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        addSectionLabel(root, "Resolución interna");
+        TextView subtitle = new TextView(this);
+        subtitle.setText("Juega en tu móvil o prueba una partida por Wi-Fi");
+        subtitle.setTextColor(Color.rgb(166, 176, 192));
+        subtitle.setTextSize(13f);
+        subtitle.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams subtitleParams = selectorParams();
+        subtitleParams.bottomMargin = dp(18);
+        root.addView(subtitle, subtitleParams);
+
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        LinearLayout gameCard = addCard(root);
+        addSectionLabel(gameCard, "JUEGO");
+        TextView gameDescription = cardDescription("Selecciona la ROM y abre el juego.");
+        gameCard.addView(gameDescription, selectorParams());
+
+        chooseGameButton = new Button(this);
+        chooseGameButton.setAllCaps(false);
+        chooseGameButton.setOnClickListener(v -> chooseGameImage());
+        LinearLayout.LayoutParams chooseParams = buttonParams();
+        chooseParams.topMargin = dp(12);
+        gameCard.addView(chooseGameButton, chooseParams);
+
+        playGameButton = new Button(this);
+        playGameButton.setText("Jugar");
+        playGameButton.setAllCaps(false);
+        playGameButton.setOnClickListener(v -> launchGame());
+        LinearLayout.LayoutParams playParams = buttonParams();
+        playParams.topMargin = dp(6);
+        gameCard.addView(playGameButton, playParams);
+
+        LinearLayout lanCard = addCard(root);
+        addSectionLabel(lanCard, "MULTIJUGADOR LAN · EXPERIMENTAL");
+        TextView lanDescription = cardDescription(
+                "Dos móviles en la misma Wi-Fi. El anfitrión será P1; quien se una, P2.");
+        lanCard.addView(lanDescription, selectorParams());
+
+        LinearLayout lanActions = new LinearLayout(this);
+        lanActions.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams lanActionsParams = selectorParams();
+        lanActionsParams.topMargin = dp(8);
+        lanCard.addView(lanActions, lanActionsParams);
+
+        createLanButton = new Button(this);
+        createLanButton.setText("Crear sala");
+        createLanButton.setAllCaps(false);
+        createLanButton.setOnClickListener(v -> showCreateLanDialog());
+        LinearLayout.LayoutParams createParams = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        createParams.rightMargin = dp(6);
+        lanActions.addView(createLanButton, createParams);
+
+        joinLanButton = new Button(this);
+        joinLanButton.setText("Unirse");
+        joinLanButton.setAllCaps(false);
+        joinLanButton.setOnClickListener(v -> showJoinLanDialog());
+        LinearLayout.LayoutParams joinParams = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        joinParams.leftMargin = dp(6);
+        lanActions.addView(joinLanButton, joinParams);
+
+        LinearLayout settingsCard = addCard(root);
+        Button settingsButton = new Button(this);
+        settingsButton.setText("Ajustes");
+        settingsButton.setAllCaps(false);
+        settingsCard.addView(settingsButton, buttonParams());
+
+        LinearLayout settings = new LinearLayout(this);
+        settings.setOrientation(LinearLayout.VERTICAL);
+        settings.setGravity(Gravity.CENTER_HORIZONTAL);
+        settings.setVisibility(View.GONE);
+        LinearLayout.LayoutParams settingsParams = selectorParams();
+        settingsParams.topMargin = dp(8);
+        settingsCard.addView(settings, settingsParams);
+        settingsButton.setOnClickListener(v -> {
+            boolean expanded = settings.getVisibility() != View.VISIBLE;
+            settings.setVisibility(expanded ? View.VISIBLE : View.GONE);
+            settingsButton.setText(expanded ? "Cerrar ajustes" : "Ajustes");
+        });
+
+        addSectionLabel(settings, "RENDIMIENTO");
         resolutionSpinner = new Spinner(this);
         ArrayAdapter<String> resolutionAdapter = new ArrayAdapter<>(
                 this, android.R.layout.simple_spinner_item, RESOLUTION_LABELS);
         resolutionAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         resolutionSpinner.setAdapter(resolutionAdapter);
-        root.addView(resolutionSpinner, selectorParams());
-
-        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        settings.addView(resolutionSpinner, selectorParams());
         resolutionSpinner.setSelection(resolutionIndex(
                 prefs.getInt(PREF_RESOLUTION_ROWS, 720)));
 
-        addSectionLabel(root, "Fotogramas");
+        addSectionLabel(settings, "LÍMITE DE FPS");
         frameRateSpinner = new Spinner(this);
         ArrayAdapter<String> frameRateAdapter = new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_item,
@@ -139,50 +218,7 @@ public final class MainActivity extends Activity {
         frameRateAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         frameRateSpinner.setAdapter(frameRateAdapter);
         frameRateSpinner.setSelection(prefs.getInt(PREF_TARGET_FPS, 60) == 120 ? 1 : 0);
-        root.addView(frameRateSpinner, selectorParams());
-
-        chooseGameButton = new Button(this);
-        chooseGameButton.setAllCaps(false);
-        chooseGameButton.setOnClickListener(v -> chooseGameImage());
-        LinearLayout.LayoutParams chooseParams = buttonParams();
-        chooseParams.topMargin = dp(24);
-        root.addView(chooseGameButton, chooseParams);
-
-        playGameButton = new Button(this);
-        playGameButton.setText("Jugar");
-        playGameButton.setAllCaps(false);
-        playGameButton.setOnClickListener(v -> launchGame());
-        LinearLayout.LayoutParams playParams = buttonParams();
-        playParams.topMargin = dp(10);
-        root.addView(playGameButton, playParams);
-
-        addSectionLabel(root, "Multijugador por Wi-Fi · Experimental");
-        createLanButton = new Button(this);
-        createLanButton.setText("Crear sala LAN");
-        createLanButton.setAllCaps(false);
-        createLanButton.setOnClickListener(v -> showCreateLanDialog());
-        root.addView(createLanButton, buttonParams());
-
-        joinLanButton = new Button(this);
-        joinLanButton.setText("Unirse por IP");
-        joinLanButton.setAllCaps(false);
-        joinLanButton.setOnClickListener(v -> showJoinLanDialog());
-        root.addView(joinLanButton, buttonParams());
-
-        Button settingsButton = new Button(this);
-        settingsButton.setText("Ajustes");
-        settingsButton.setAllCaps(false);
-        root.addView(settingsButton, buttonParams());
-        LinearLayout settings = new LinearLayout(this);
-        settings.setOrientation(LinearLayout.VERTICAL);
-        settings.setGravity(Gravity.CENTER_HORIZONTAL);
-        settings.setVisibility(View.GONE);
-        root.addView(settings, selectorParams());
-        settingsButton.setOnClickListener(v -> {
-            boolean expanded = settings.getVisibility() != View.VISIBLE;
-            settings.setVisibility(expanded ? View.VISIBLE : View.GONE);
-            settingsButton.setText(expanded ? "Cerrar ajustes" : "Ajustes");
-        });
+        settings.addView(frameRateSpinner, selectorParams());
 
         addSectionLabel(settings, "Idioma");
         languageSpinner = new Spinner(this);
@@ -239,27 +275,52 @@ public final class MainActivity extends Activity {
         return scroll;
     }
 
+    private LinearLayout addCard(LinearLayout parent) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setPadding(dp(16), dp(10), dp(16), dp(14));
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(24, 28, 36));
+        background.setCornerRadius(dp(16));
+        background.setStroke(dp(1), Color.rgb(43, 49, 60));
+        card.setBackground(background);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin = dp(12);
+        parent.addView(card, params);
+        return card;
+    }
+
+    private TextView cardDescription(String value) {
+        TextView description = new TextView(this);
+        description.setText(value);
+        description.setTextColor(Color.rgb(174, 183, 197));
+        description.setTextSize(13f);
+        description.setGravity(Gravity.START);
+        return description;
+    }
+
     private void addSectionLabel(LinearLayout root, String value) {
         TextView label = new TextView(this);
         label.setText(value);
-        label.setTextColor(Color.WHITE);
-        label.setTextSize(14f);
-        label.setPadding(0, dp(12), 0, dp(4));
+        label.setTextColor(Color.rgb(139, 159, 188));
+        label.setTextSize(12f);
+        label.setPadding(0, dp(7), 0, dp(5));
         root.addView(label, new LinearLayout.LayoutParams(
-                selectorWidth(), LinearLayout.LayoutParams.WRAP_CONTENT));
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
     private LinearLayout.LayoutParams selectorParams() {
-        return new LinearLayout.LayoutParams(selectorWidth(), LinearLayout.LayoutParams.WRAP_CONTENT);
-    }
-
-    private int selectorWidth() {
-        int width = getResources().getDisplayMetrics().widthPixels - dp(56);
-        return Math.max(dp(220), Math.min(dp(440), width));
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
     }
 
     private LinearLayout.LayoutParams buttonParams() {
-        return new LinearLayout.LayoutParams(selectorWidth(), LinearLayout.LayoutParams.WRAP_CONTENT);
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
     }
 
     private void updateLauncherControls() {
@@ -402,11 +463,11 @@ public final class MainActivity extends Activity {
 
         new AlertDialog.Builder(this)
                 .setTitle("Crear sala LAN")
-                .setMessage("Comparte esta dirección con el otro móvil:\n\n"
+                .setMessage("Tu móvil será el jugador 1 (P1). Comparte esta dirección:\n\n"
                         + localAddress + ":" + GameBootstrapActivity.LAN_PORT
-                        + "\n\nUsen la misma ROM, entren al mismo modo y elijan los mismos equipos."
-                        + " Empiecen el partido casi a la vez."
-                        + " Prototipo experimental: todavía no sincroniza automáticamente el inicio del partido.")
+                        + "\n\nEl otro móvil debe elegir «Unirse» y será P2. Usen la misma ROM,"
+                        + " modo y equipos. El indicador del juego mostrará 2/2 cuando se conecte."
+                        + " El inicio de la partida aún no se sincroniza automáticamente.")
                 .setNegativeButton("Cancelar", null)
                 .setPositiveButton("Abrir anfitrión", (dialog, which) ->
                         launchGame(GameBootstrapActivity.LAN_ROLE_HOST, null, localAddress))
@@ -422,7 +483,7 @@ public final class MainActivity extends Activity {
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Unirse a una sala LAN")
-                .setMessage("Escribe la IP que muestra el teléfono anfitrión. Ambos deben estar en la misma Wi-Fi.")
+                .setMessage("Escribe la IP del anfitrión. Tu móvil será P2 y ambos deben estar en la misma Wi-Fi.")
                 .setView(addressInput)
                 .setNegativeButton("Cancelar", null)
                 .setPositiveButton("Conectar", null)

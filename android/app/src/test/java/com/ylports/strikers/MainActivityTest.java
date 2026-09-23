@@ -71,4 +71,29 @@ public class MainActivityTest {
             controller.pause().stop().destroy();
         }
     }
+
+    @Test public void lanActionsShareOneRowAndAdvancedSettingsStartCollapsed() {
+        ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)
+                .setup().visible();
+        try {
+            View root = controller.get().getWindow().getDecorView();
+            Button create = button(root, "Crear sala");
+            Button join = button(root, "Unirse");
+            assertNotNull(create);
+            assertNotNull(join);
+            assertSame("LAN actions should be grouped together", create.getParent(), join.getParent());
+
+            Button settings = button(root, "Ajustes");
+            Button graphics = button(root, "Gráficos");
+            assertNotNull(settings);
+            assertNotNull(graphics);
+            assertFalse("advanced settings should not crowd the first screen", graphics.isShown());
+
+            settings.performClick();
+            assertTrue(graphics.isShown());
+            assertNotNull(button(root, "Cerrar ajustes"));
+        } finally {
+            controller.pause().stop().destroy();
+        }
+    }
 }

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.BatteryManager;
 import android.content.res.Configuration;
 import android.hardware.input.InputManager;
@@ -47,6 +48,7 @@ public final class StrikersActivity extends SDLActivity
     private int lanRole = GameBootstrapActivity.LAN_ROLE_OFF;
     private String lanLocalAddress;
     private boolean lanStartSucceeded;
+    private int lanBadgeState = -1;
     private static native float nativePresentedFps();
     private static native String nativeRuntimeSnapshot();
     private static native boolean nativeStartLan(int role, String host, int port);
@@ -109,12 +111,14 @@ public final class StrikersActivity extends SDLActivity
             lanStartSucceeded = nativeStartLan(lanRole, host, GameBootstrapActivity.LAN_PORT);
             lanStatusView = new TextView(this);
             lanStatusView.setTextColor(Color.WHITE);
-            lanStatusView.setTextSize(14);
-            lanStatusView.setBackgroundColor(0x99000000);
-            lanStatusView.setPadding(12, 7, 12, 7);
+            lanStatusView.setTextSize(13);
+            lanStatusView.setGravity(Gravity.CENTER);
+            lanStatusView.setPadding(dp(12), dp(7), dp(12), dp(7));
+            lanStatusView.setMaxWidth(getResources().getDisplayMetrics().widthPixels - dp(24));
             lanStatusView.setClickable(false);
             lanStatusView.setFocusable(false);
-            lanStatusView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            lanStatusView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+            lanStatusView.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
             if (!lanStartSucceeded) {
                 RunLog.append(this, "LAN: no se pudo abrir la sala o iniciar el socket");
             }
@@ -428,11 +432,42 @@ public final class StrikersActivity extends SDLActivity
         String status = lanStartSucceeded ? nativeLanStatus() : "LAN: no se pudo abrir la sala";
         if (lanStartSucceeded && lanRole == GameBootstrapActivity.LAN_ROLE_HOST
                 && lanLocalAddress != null) {
-            status += " · " + lanLocalAddress + ":" + GameBootstrapActivity.LAN_PORT;
+            status += "\n" + lanLocalAddress + ":" + GameBootstrapActivity.LAN_PORT;
         }
         lanStatusView.setText(status);
+        lanStatusView.setContentDescription("Estado LAN: " + status.replace('\n', ' '));
+        applyLanBadgeStyle(status);
         ensureTouchOverlayAttached();
         uiHandler.postDelayed(lanStatusRunnable, 600);
+    }
+
+    private void applyLanBadgeStyle(String status) {
+        int state;
+        if (status.startsWith("2/2")) {
+            state = 2;
+        } else if (status.contains("perdido") || status.contains("no se pudo")) {
+            state = 0;
+        } else {
+            state = 1;
+        }
+        if (state == lanBadgeState) return;
+        lanBadgeState = state;
+
+        int backgroundColor = state == 2 ? 0xE01D593A
+                : state == 0 ? 0xE05F2A2A : 0xE05A4818;
+        int foregroundColor = state == 2 ? 0xFFE4FFF0
+                : state == 0 ? 0xFFFFE6E6 : 0xFFFFF2C2;
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(backgroundColor);
+        background.setCornerRadius(dp(10));
+        background.setStroke(dp(1), state == 2 ? 0xFF55A978
+                : state == 0 ? 0xFFB95C5C : 0xFFAC8D43);
+        lanStatusView.setBackground(background);
+        lanStatusView.setTextColor(foregroundColor);
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     private void updateTouchOverlayVisibility() {

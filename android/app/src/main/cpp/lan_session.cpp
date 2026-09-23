@@ -376,13 +376,15 @@ void SendLocalInput(const PADStatus& local) {
 }
 
 std::string Status() {
-    if (!g_session.active.load(std::memory_order_relaxed)) return "LAN: desactivado";
+    if (!g_session.active.load(std::memory_order_relaxed)) return "LAN desactivada";
     const int role = g_session.role.load(std::memory_order_relaxed);
     if (g_session.connected.load(std::memory_order_relaxed)) {
-        return role == kRoleHost ? "LAN: rival conectado (P2)" : "LAN: conectado (P1 anfitrión)";
+        return role == kRoleHost ? "2/2 jugadores · tú P1" : "2/2 jugadores · tú P2";
     }
-    if (g_session.everConnected.load(std::memory_order_relaxed)) return "LAN: conexión perdida; intentando volver";
-    return role == kRoleHost ? "LAN: sala abierta; esperando rival" : "LAN: buscando anfitrión";
+    if (g_session.everConnected.load(std::memory_order_relaxed)) {
+        return "Rival perdido · reconectando";
+    }
+    return role == kRoleHost ? "1/2 jugadores · esperando rival P2" : "Buscando anfitrión P1";
 }
 
 std::string JString(JNIEnv* env, jstring value) {
