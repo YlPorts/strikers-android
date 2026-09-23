@@ -13,6 +13,10 @@ PADStatus PadStatus::s_B[4];
 PADStatus* PadStatus::s_Current = PadStatus::s_A;
 PADStatus* PadStatus::s_Next = PadStatus::s_B;
 
+#if defined(STRIKERS_ANDROID)
+extern "C" void PortAndroidLanProcessPads(PADStatus* pads);
+#endif
+
 u32 g_nPadMasks[PAD_MAX_CONTROLLERS] = { 0x80000000, 0x40000000, 0x20000000, 0x10000000 };
 
 bool cPlatPad::m_bDisableRumble = false;
@@ -54,6 +58,9 @@ cPlatPad::~cPlatPad()
 void VBlankPadUpdate()
 {
     PADRead(PadStatus::s_Next);
+#if defined(STRIKERS_ANDROID)
+    PortAndroidLanProcessPads(PadStatus::s_Next);
+#endif
     PADClampCircle(PadStatus::s_Next);
 
     if (PortOverlayMenuOpen())

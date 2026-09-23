@@ -28,6 +28,7 @@ add_subdirectory(
 # cmake/android names the resulting library libstrikers.so.
 target_sources(strikers_android PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/strikers_jni.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/lan_session.cpp"
 )
 
 target_compile_definitions(strikers_android PRIVATE

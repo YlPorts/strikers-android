@@ -139,14 +139,14 @@ union FunctionAddress
     const FuzzyVariant& fvQuestion = FuzzyVariant(arg);                              \
     FunctionAddress functionAddress;                                                 \
     functionAddress.member = fn;                                                     \
-    uintptr_t hash = StrategicQuestionHash(functionAddress.address, fvQuestion); \
+    ScriptQuestionKey hash = StrategicQuestionHash(functionAddress.address, fvQuestion); \
     (void)FuzzyVariant(arg)
 
 #define SCRIPT_QUESTION_KEY(member, fn, arg)                                         \
     FuzzyVariant fvQuestion(arg);                                                    \
     FunctionAddress functionAddress;                                                 \
     functionAddress.member = fn;                                                     \
-    uintptr_t hash = StrategicQuestionHash(functionAddress.address, fvQuestion); \
+    ScriptQuestionKey hash = StrategicQuestionHash(functionAddress.address, fvQuestion); \
     FuzzyVariant fvQuestion2(arg)
 
 float InBetweenMyNetAnd(cFielder*, cFielder*);
@@ -179,11 +179,18 @@ extern cBall* g_pScriptBall;
 
 #include "Game/AI/Scripts/ScriptCaching.h"
 
-static inline uintptr_t StrategicQuestionHash(
+static inline ScriptQuestionKey StrategicQuestionHash(
     uintptr_t functionAddress,
     const FuzzyVariant& argument)
 {
-    return functionAddress + ((const Variant*)&argument)->GetHash();
+    return MakeScriptQuestionKey(functionAddress, *(const Variant*)&argument);
+}
+
+// Cached action targets must be a player pointer or empty before dereferencing.
+static void RequirePlayerResult(FuzzyVariant& result)
+{
+    if (result.mType != FT_PLAYER && result.mType != FT_UNSPECIFIED)
+        result.Reset();
 }
 
 /**
@@ -2079,6 +2086,7 @@ FuzzyVariant Fuzzy::GetBestPassReceiveAction(cFielder* TheFielder)
             }
 
             FuzzyVariant bestPassTargetFielder = GetBestPassTarget((cPlayer*)TheFielder);
+            RequirePlayerResult(bestPassTargetFielder);
 
             FuzzyVariant passAction(13);
             passAction.ExtraData = (Variant&)bestPassTargetFielder;
@@ -2266,6 +2274,7 @@ FuzzyVariant Fuzzy::GetBestLooseBallAction(cFielder* TheFielder)
 
         cTeam* otherTeam = TheFielder ? ((cPlayer*)TheFielder)->m_pTeam->GetOtherTeam() : NULL;
         FuzzyVariant otherSBC = Fuzzy::GetStrategicBallCarrier(otherTeam);
+        RequirePlayerResult(otherSBC);
 
         float fTrueConfidence3 = nlMinFour(
             1.0f - FarToBall((cPlayer*)TheFielder),
@@ -2583,6 +2592,7 @@ FuzzyVariant Fuzzy::GetBestLooseBallAction(cFielder* TheFielder)
         }
 
         FuzzyVariant bestPassTargetFielder = Fuzzy::GetBestLooseBallPassTarget(TheFielder);
+        RequirePlayerResult(bestPassTargetFielder);
 
         float fCanPass = nlMinFour(TheFielder->CanLooseBallPass() ? 1.0f : 0.0f,
             FGREATER(bestPassTargetFielder.Confidence, 0.3f),
@@ -2801,6 +2811,7 @@ FuzzyVariant Fuzzy::GetBestWindupShotAction(cFielder* TheFielder)
 
                     {
                         FuzzyVariant bestPassTargetFielder = Fuzzy::GetBestPassTarget((cPlayer*)TheFielder);
+                        RequirePlayerResult(bestPassTargetFielder);
 
                         fTrueConfidence = FGREATER(bestPassTargetFielder.Confidence, 0.3f);
                         float fFalseConfidence = 1.0f - fTrueConfidence;

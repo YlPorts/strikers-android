@@ -42,9 +42,16 @@ public final class StrikersActivity extends SDLActivity
     private boolean resumed;
     private Handler uiHandler;
     private TextView performanceView;
+    private TextView lanStatusView;
     private SessionDiagnostics sessionDiagnostics;
+    private int lanRole = GameBootstrapActivity.LAN_ROLE_OFF;
+    private String lanLocalAddress;
+    private boolean lanStartSucceeded;
     private static native float nativePresentedFps();
     private static native String nativeRuntimeSnapshot();
+    private static native boolean nativeStartLan(int role, String host, int port);
+    private static native void nativeStopLan();
+    private static native String nativeLanStatus();
     private final Runnable performanceRunnable = new Runnable() {
         @Override public void run() {
             if (!resumed || performanceView == null || mBrokenLibraries || isFinishing()) return;
@@ -76,6 +83,7 @@ public final class StrikersActivity extends SDLActivity
 
 
     private final Runnable hideSettingsControlRunnable = this::hideSettingsControl;
+    private final Runnable lanStatusRunnable = this::updateLanStatus;
     private final Runnable overlayRecoveryRunnable = () -> {
         if (!resumed || isFinishing() || isDestroyed() || mBrokenLibraries) return;
         applyImmersiveMode();
@@ -93,6 +101,24 @@ public final class StrikersActivity extends SDLActivity
 
         uiHandler = new Handler(Looper.getMainLooper());
         sessionDiagnostics = new SessionDiagnostics(this, StrikersActivity::nativeRuntimeSnapshot);
+        lanRole = getIntent().getIntExtra(
+                GameBootstrapActivity.EXTRA_LAN_ROLE, GameBootstrapActivity.LAN_ROLE_OFF);
+        lanLocalAddress = getIntent().getStringExtra(GameBootstrapActivity.EXTRA_LAN_LOCAL_ADDRESS);
+        if (lanRole != GameBootstrapActivity.LAN_ROLE_OFF) {
+            String host = getIntent().getStringExtra(GameBootstrapActivity.EXTRA_LAN_ADDRESS);
+            lanStartSucceeded = nativeStartLan(lanRole, host, GameBootstrapActivity.LAN_PORT);
+            lanStatusView = new TextView(this);
+            lanStatusView.setTextColor(Color.WHITE);
+            lanStatusView.setTextSize(14);
+            lanStatusView.setBackgroundColor(0x99000000);
+            lanStatusView.setPadding(12, 7, 12, 7);
+            lanStatusView.setClickable(false);
+            lanStatusView.setFocusable(false);
+            lanStatusView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            if (!lanStartSucceeded) {
+                RunLog.append(this, "LAN: no se pudo abrir la sala o iniciar el socket");
+            }
+        }
         if (getIntent().getBooleanExtra(GraphicsSettings.STATS, false)) {
             performanceView = new TextView(this);
             performanceView.setTextColor(Color.WHITE);
@@ -138,6 +164,10 @@ public final class StrikersActivity extends SDLActivity
         if (uiHandler != null && performanceView != null) {
             uiHandler.removeCallbacks(performanceRunnable);
             uiHandler.post(performanceRunnable);
+        }
+        if (uiHandler != null && lanRole != GameBootstrapActivity.LAN_ROLE_OFF) {
+            uiHandler.removeCallbacks(lanStatusRunnable);
+            uiHandler.post(lanStatusRunnable);
         }
         applyImmersiveMode();
         ensureTouchOverlayAttached();
@@ -203,6 +233,7 @@ public final class StrikersActivity extends SDLActivity
             sessionDiagnostics.stop();
             sessionDiagnostics = null;
         }
+        if (lanStartSucceeded) nativeStopLan();
         cancelOverlayCallbacks();
         if (inputManager != null) {
             inputManager.unregisterInputDeviceListener(this);
@@ -244,6 +275,7 @@ public final class StrikersActivity extends SDLActivity
             uiHandler.removeCallbacks(hideSettingsControlRunnable);
             uiHandler.removeCallbacks(overlayRecoveryRunnable);
             uiHandler.removeCallbacks(performanceRunnable);
+            uiHandler.removeCallbacks(lanStatusRunnable);
         }
     }
 
@@ -305,6 +337,20 @@ public final class StrikersActivity extends SDLActivity
                 performanceView.setTranslationZ(2f);
             }
             performanceView.bringToFront();
+        }
+        if (lanStatusView != null && contentRoot instanceof FrameLayout) {
+            if (lanStatusView.getParent() != contentRoot) {
+                if (lanStatusView.getParent() instanceof ViewGroup) {
+                    ((ViewGroup) lanStatusView.getParent()).removeView(lanStatusView);
+                }
+                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+                params.topMargin = (int) (18 * getResources().getDisplayMetrics().density);
+                contentRoot.addView(lanStatusView, params);
+                lanStatusView.setTranslationZ(3f);
+            }
+            lanStatusView.bringToFront();
         }
     }
 
@@ -374,6 +420,19 @@ public final class StrikersActivity extends SDLActivity
         if (touchController != null && resumed) {
             touchController.setSettingsControlVisible(false);
         }
+    }
+
+    private void updateLanStatus() {
+        if (!resumed || lanStatusView == null || uiHandler == null
+                || isFinishing() || isDestroyed()) return;
+        String status = lanStartSucceeded ? nativeLanStatus() : "LAN: no se pudo abrir la sala";
+        if (lanStartSucceeded && lanRole == GameBootstrapActivity.LAN_ROLE_HOST
+                && lanLocalAddress != null) {
+            status += " · " + lanLocalAddress + ":" + GameBootstrapActivity.LAN_PORT;
+        }
+        lanStatusView.setText(status);
+        ensureTouchOverlayAttached();
+        uiHandler.postDelayed(lanStatusRunnable, 600);
     }
 
     private void updateTouchOverlayVisibility() {

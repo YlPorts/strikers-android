@@ -35,6 +35,13 @@ public final class GameBootstrapActivity extends Activity {
     public static final String EXTRA_AUTO_HIDE_TOUCH = "com.ylports.strikers.AUTO_HIDE_TOUCH";
     public static final String EXTRA_TARGET_FPS = "com.ylports.strikers.TARGET_FPS";
     public static final String EXTRA_SAVE_FOLDER = "com.ylports.strikers.SAVE_FOLDER";
+    public static final String EXTRA_LAN_ROLE = "com.ylports.strikers.LAN_ROLE";
+    public static final String EXTRA_LAN_ADDRESS = "com.ylports.strikers.LAN_ADDRESS";
+    public static final String EXTRA_LAN_LOCAL_ADDRESS = "com.ylports.strikers.LAN_LOCAL_ADDRESS";
+    public static final int LAN_ROLE_OFF = 0;
+    public static final int LAN_ROLE_HOST = 1;
+    public static final int LAN_ROLE_CLIENT = 2;
+    public static final int LAN_PORT = 43821;
     public static final String LAST_RUN_LOG = RunLog.FILE_NAME;
 
     // Keep the descriptor alive for the lifetime of the :game process. libstrikers.so duplicates
@@ -207,10 +214,16 @@ public final class GameBootstrapActivity extends Activity {
             RunLog.append(this, "bootstrap: native stderr attached");
 
             Intent nativeGame = new Intent();
-            nativeGame.setClassName(getPackageName(), getPackageName() + ".StrikersActivity");
+            nativeGame.setClassName(getPackageName(), StrikersActivity.class.getName());
             nativeGame.putExtra(EXTRA_AUTO_HIDE_TOUCH,
                     getIntent().getBooleanExtra(EXTRA_AUTO_HIDE_TOUCH, false));
             nativeGame.putExtra(EXTRA_TARGET_FPS, targetFps);
+            nativeGame.putExtra(EXTRA_LAN_ROLE,
+                    getIntent().getIntExtra(EXTRA_LAN_ROLE, LAN_ROLE_OFF));
+            nativeGame.putExtra(EXTRA_LAN_ADDRESS,
+                    getIntent().getStringExtra(EXTRA_LAN_ADDRESS));
+            nativeGame.putExtra(EXTRA_LAN_LOCAL_ADDRESS,
+                    getIntent().getStringExtra(EXTRA_LAN_LOCAL_ADDRESS));
             nativeGame.putExtra(GraphicsSettings.STATS, getIntent().getBooleanExtra(GraphicsSettings.STATS, false));
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) {
@@ -280,7 +293,7 @@ public final class GameBootstrapActivity extends Activity {
     private void returnToLauncher() {
         closeGameImageFd();
         Intent launcher = new Intent();
-        launcher.setClassName(getPackageName(), getPackageName() + ".MainActivity");
+        launcher.setClassName(getPackageName(), MainActivity.class.getName());
         launcher.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         startActivity(launcher);
         finish();

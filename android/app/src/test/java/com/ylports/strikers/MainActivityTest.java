@@ -60,6 +60,9 @@ public class MainActivityTest {
             button(root, "Jugar").performClick();
             Intent game = shadowOf(activity).getNextStartedActivity();
             assertNotNull(game);
+            assertEquals(GameBootstrapActivity.class.getName(), game.getComponent().getClassName());
+            assertEquals(GameBootstrapActivity.LAN_ROLE_OFF,
+                    game.getIntExtra(GameBootstrapActivity.EXTRA_LAN_ROLE, -1));
             assertEquals(1080, game.getIntExtra(GameBootstrapActivity.EXTRA_RENDER_ROWS, 0));
             assertEquals(120, game.getIntExtra(GameBootstrapActivity.EXTRA_TARGET_FPS, 0));
             assertEquals("spanish", game.getStringExtra(GameBootstrapActivity.EXTRA_LANGUAGE));

@@ -4,6 +4,8 @@
 #include "NL/nlSingleton.h"
 #include "NL/nlAVLTree.h"
 #include "Game/AI/FuzzyVariant.h"
+#include "Game/AI/Scripts/ScriptQuestionKey.h"
+#include <string.h>
 
 // The original Metrowerks tree implementation owns its own pair type. Android's
 // libc++ also exposes std::pair through the __ndk1 inline namespace, so remap
@@ -20,14 +22,37 @@
 extern unsigned char g_bScriptQuestionCachingOn;
 extern unsigned char g_bScriptQuestionCachingUseSTD;
 
-// PORT: uintptr_t keys, the key is two pointers summed, and is 32 bits on Windows otherwise.
+// PORT: keep the Android-only Metrowerks pair workaround for libc++ compatibility.
 #if defined(__ANDROID__)
-typedef std::msl_pair<const uintptr_t, FuzzyVariant> ScriptCachePair;
+typedef std::msl_pair<const ScriptQuestionKey, FuzzyVariant> ScriptCachePair;
 #else
-typedef std::pair<const uintptr_t, FuzzyVariant> ScriptCachePair;
+typedef std::pair<const ScriptQuestionKey, FuzzyVariant> ScriptCachePair;
 #endif
-typedef std::map<uintptr_t, FuzzyVariant, std::less<uintptr_t>, std::allocator<ScriptCachePair> > ScriptCacheMap;
+typedef std::map<ScriptQuestionKey, FuzzyVariant, std::less<ScriptQuestionKey>, std::allocator<ScriptCachePair> > ScriptCacheMap;
 typedef std::__tree<ScriptCachePair, ScriptCacheMap::value_compare, std::allocator<ScriptCachePair> > ScriptCacheTree;
+
+inline ScriptQuestionKey MakeScriptQuestionKey(uintptr_t question, const Variant& argument)
+{
+    ScriptQuestionKey key;
+    key.question = question;
+    key.tag = (int)argument.mType;
+    if (argument.mType == FT_VECTOR)
+    {
+        // Variant::Reset initializes all three vector floats; preserve their raw bits.
+        u32 x, y, z;
+        memcpy(&x, &argument.mData.vector.x, sizeof x);
+        memcpy(&y, &argument.mData.vector.y, sizeof y);
+        memcpy(&z, &argument.mData.vector.z, sizeof z);
+        key.subjectLo = ((uintptr_t)y << 32) | (uintptr_t)x;
+        key.subjectHi = (uintptr_t)z;
+    }
+    else
+    {
+        key.subjectLo = argument.mData.u;
+        key.subjectHi = 0;
+    }
+    return key;
+}
 
 class ScriptQuestionCache : public nlSingleton<ScriptQuestionCache>
 {
@@ -40,7 +65,7 @@ public:
     }
 
     ~ScriptQuestionCache();
-    unsigned char Lookup(uintptr_t hash, FuzzyVariant& returnVal, const char* name)
+    unsigned char Lookup(const ScriptQuestionKey& hash, FuzzyVariant& returnVal, const char* name)
     {
         struct MapNodeBase
         {
@@ -58,7 +83,7 @@ public:
         struct MapNode
         {
             MapNodeBase base;
-            unsigned long key;
+            ScriptQuestionKey key;
             FuzzyVariant value;
         };
 
@@ -85,10 +110,10 @@ public:
 
         return 0;
     }
-    const FuzzyVariant& AddToCache(uintptr_t, const FuzzyVariant&, const char*);
+    const FuzzyVariant& AddToCache(const ScriptQuestionKey&, const FuzzyVariant&, const char*);
     void Clear();
 
-    /* 0x00 */ nlAVLTreeSlotPool<uintptr_t, FuzzyVariant, DefaultKeyCompare<uintptr_t> > mQuestionCacheMap;
+    /* 0x00 */ nlAVLTreeSlotPool<ScriptQuestionKey, FuzzyVariant, DefaultKeyCompare<ScriptQuestionKey> > mQuestionCacheMap;
     /* 0x28 */ ScriptCacheMap mQuestionCacheMapSTD;
     /* 0x38 */ int mTotalLookups;
     /* 0x3C */ int mCacheHits;
@@ -107,14 +132,14 @@ inline void ScriptQuestionCache::Clear()
     mTotalLookups = 0;
 }
 inline const FuzzyVariant& ScriptQuestionCache::AddToCache(
-    uintptr_t key, const FuzzyVariant& variant, const char* name)
+    const ScriptQuestionKey& key, const FuzzyVariant& variant, const char* name)
 {
     if (g_bScriptQuestionCachingOn)
     {
         const FuzzyVariant& cacheValue = variant;
         if (g_bScriptQuestionCachingUseSTD)
         {
-            mQuestionCacheMapSTD.tree_.find_or_insert<uintptr_t, FuzzyVariant>(key).second = cacheValue;
+            mQuestionCacheMapSTD.tree_.find_or_insert<ScriptQuestionKey, FuzzyVariant>(key).second = cacheValue;
         }
         else
         {

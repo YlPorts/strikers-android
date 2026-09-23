@@ -8,6 +8,18 @@ plugins {
 val sdlVersion = "3.4.10"
 val sdlArchive = layout.buildDirectory.file("downloads/SDL-$sdlVersion.tar.gz")
 val sdlJavaDir = layout.buildDirectory.dir("generated/sdl-java")
+val releaseKeystore = providers.environmentVariable("STRIKERS_RELEASE_KEYSTORE").orNull
+    ?: providers.gradleProperty("STRIKERS_RELEASE_KEYSTORE").orNull
+val releaseStorePassword = providers.environmentVariable("STRIKERS_RELEASE_STORE_PASSWORD").orNull
+    ?: providers.gradleProperty("STRIKERS_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("STRIKERS_RELEASE_KEY_ALIAS").orNull
+    ?: providers.gradleProperty("STRIKERS_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("STRIKERS_RELEASE_KEY_PASSWORD").orNull
+    ?: providers.gradleProperty("STRIKERS_RELEASE_KEY_PASSWORD").orNull
+val hasReleaseSigning = !releaseKeystore.isNullOrBlank()
+    && !releaseStorePassword.isNullOrBlank()
+    && !releaseKeyAlias.isNullOrBlank()
+    && !releaseKeyPassword.isNullOrBlank()
 
 val downloadSdlSource = tasks.register("downloadSdlSource") {
     outputs.file(sdlArchive)
@@ -44,8 +56,8 @@ android {
         applicationId = "com.ylports.strikers"
         minSdk = 26
         targetSdk = 36
-        versionCode = 162
-        versionName = "1.5.12"
+        versionCode = 164
+        versionName = "1.5.14"
 
         ndk { abiFilters += listOf("arm64-v8a") }
 
@@ -59,13 +71,34 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("strikersRelease") {
+                storeFile = file(requireNotNull(releaseKeystore))
+                storePassword = requireNotNull(releaseStorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
+            }
+        }
+    }
+
     buildTypes {
         debug { isJniDebuggable = true }
         release {
             isDebuggable = false
             isJniDebuggable = false
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("strikersRelease")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
+        create("lanPrototype") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".lan"
+            versionNameSuffix = "-LAN"
+            matchingFallbacks += listOf("release")
         }
     }
 

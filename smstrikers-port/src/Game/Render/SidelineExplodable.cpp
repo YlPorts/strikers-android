@@ -553,13 +553,14 @@ void SidelineExplodableManager::ReturnDrawableFragmentToPool(unsigned short hand
 {
     DrawableFragmentHandleNode* node = DrawableFragmentHandleNode::sDrawableFragmentHandleNodePool.Allocate();
 
-    if (node != NULL)
+    if (node == NULL)
     {
-        node->mID = 0;
-        node->next = NULL;
+        sFragmentLookupTable[handle] = NULL;
+        return;
     }
 
     node->mID = handle;
+    node->next = NULL;
     nlListAddEnd<DrawableFragmentHandleNode>(&sUnusedDrawableFragments.m_pStart, &sUnusedDrawableFragments.m_pEnd, node);
     sFragmentLookupTable[handle] = NULL;
 }
@@ -576,8 +577,7 @@ unsigned short SidelineExplodableManager::GetDrawableFragmentFromPool()
     {
         nlListRemoveStart(&sUnusedDrawableFragments.m_pStart, &sUnusedDrawableFragments.m_pEnd);
         handle = node->mID;
-        *(u32*)node = *(u32*)&DrawableFragmentHandleNode::sDrawableFragmentHandleNodePool.m_FreeList;
-        DrawableFragmentHandleNode::sDrawableFragmentHandleNodePool.m_FreeList = (SlotPoolEntry*)node;
+        DrawableFragmentHandleNode::sDrawableFragmentHandleNodePool.Free(node);
     }
     return handle;
 }

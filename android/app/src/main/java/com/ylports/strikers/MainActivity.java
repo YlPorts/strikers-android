@@ -1,10 +1,17 @@
 package com.ylports.strikers;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.view.Gravity;
@@ -12,12 +19,16 @@ import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
+import android.text.InputType;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.lang.ref.WeakReference;
+import java.net.Inet4Address;
+import java.net.InetAddress;
 
 /** Clean launcher for the Android release build. */
 public final class MainActivity extends Activity {
@@ -50,6 +61,8 @@ public final class MainActivity extends Activity {
     private Spinner frameRateSpinner;
     private Button chooseGameButton;
     private Button playGameButton;
+    private Button createLanButton;
+    private Button joinLanButton;
     private CheckBox autoHideTouch;
     private boolean launchPending;
     private static volatile boolean folderPending;
@@ -142,6 +155,19 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams playParams = buttonParams();
         playParams.topMargin = dp(10);
         root.addView(playGameButton, playParams);
+
+        addSectionLabel(root, "Multijugador por Wi-Fi · Experimental");
+        createLanButton = new Button(this);
+        createLanButton.setText("Crear sala LAN");
+        createLanButton.setAllCaps(false);
+        createLanButton.setOnClickListener(v -> showCreateLanDialog());
+        root.addView(createLanButton, buttonParams());
+
+        joinLanButton = new Button(this);
+        joinLanButton.setText("Unirse por IP");
+        joinLanButton.setAllCaps(false);
+        joinLanButton.setOnClickListener(v -> showJoinLanDialog());
+        root.addView(joinLanButton, buttonParams());
 
         Button settingsButton = new Button(this);
         settingsButton.setText("Ajustes");
@@ -244,6 +270,12 @@ public final class MainActivity extends Activity {
         }
         if (playGameButton != null) {
             playGameButton.setEnabled(hasGame && !launchPending && !folderPending);
+        }
+        if (createLanButton != null) {
+            createLanButton.setEnabled(hasGame && !launchPending && !folderPending);
+        }
+        if (joinLanButton != null) {
+            joinLanButton.setEnabled(hasGame && !launchPending && !folderPending);
         }
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         boolean external = prefs.getString(PREF_SAVE_FOLDER, null) != null;
@@ -358,6 +390,103 @@ public final class MainActivity extends Activity {
     }
 
     private boolean launchGame() {
+        return launchGame(GameBootstrapActivity.LAN_ROLE_OFF, null, null);
+    }
+
+    private void showCreateLanDialog() {
+        final String localAddress = findLocalIpv4Address();
+        if (localAddress == null) {
+            Toast.makeText(this, "No encontré una dirección Wi-Fi. Conéctate a la misma red en ambos móviles e inténtalo de nuevo.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("Crear sala LAN")
+                .setMessage("Comparte esta dirección con el otro móvil:\n\n"
+                        + localAddress + ":" + GameBootstrapActivity.LAN_PORT
+                        + "\n\nUsen la misma ROM, entren al mismo modo y elijan los mismos equipos."
+                        + " Empiecen el partido casi a la vez."
+                        + " Prototipo experimental: todavía no sincroniza automáticamente el inicio del partido.")
+                .setNegativeButton("Cancelar", null)
+                .setPositiveButton("Abrir anfitrión", (dialog, which) ->
+                        launchGame(GameBootstrapActivity.LAN_ROLE_HOST, null, localAddress))
+                .show();
+    }
+
+    private void showJoinLanDialog() {
+        EditText addressInput = new EditText(this);
+        addressInput.setSingleLine(true);
+        addressInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        addressInput.setHint("192.168.1.25");
+        addressInput.setPadding(dp(20), dp(10), dp(20), dp(10));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Unirse a una sala LAN")
+                .setMessage("Escribe la IP que muestra el teléfono anfitrión. Ambos deben estar en la misma Wi-Fi.")
+                .setView(addressInput)
+                .setNegativeButton("Cancelar", null)
+                .setPositiveButton("Conectar", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    String address = addressInput.getText().toString().trim();
+                    if (!isIpv4Literal(address)) {
+                        addressInput.setError("Escribe una dirección IPv4 válida");
+                        return;
+                    }
+                    dialog.dismiss();
+                    launchGame(GameBootstrapActivity.LAN_ROLE_CLIENT, address, null);
+                }));
+        dialog.show();
+    }
+
+    private String findLocalIpv4Address() {
+        try {
+            ConnectivityManager connectivity =
+                    (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (connectivity == null) return null;
+            Network active = connectivity.getActiveNetwork();
+            NetworkCapabilities capabilities = active == null
+                    ? null : connectivity.getNetworkCapabilities(active);
+            if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                return null;
+            }
+            LinkProperties properties = connectivity.getLinkProperties(active);
+            if (properties == null) return null;
+            for (LinkAddress linkAddress : properties.getLinkAddresses()) {
+                InetAddress address = linkAddress.getAddress();
+                if (address instanceof Inet4Address && !address.isLoopbackAddress()
+                        && !address.isLinkLocalAddress() && !address.isMulticastAddress()) {
+                    return address.getHostAddress();
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            RunLog.append(this, "LAN: no se pudo detectar la IP local: " + e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private static boolean isIpv4Literal(String address) {
+        String[] parts = address.split("\\.", -1);
+        if (parts.length != 4) return false;
+        int firstOctet = -1;
+        for (String part : parts) {
+            if (part.isEmpty() || part.length() > 3
+                    || (part.length() > 1 && part.charAt(0) == '0')) return false;
+            int value = 0;
+            for (int i = 0; i < part.length(); i++) {
+                char digit = part.charAt(i);
+                if (digit < '0' || digit > '9') return false;
+                value = value * 10 + digit - '0';
+            }
+            if (value > 255) return false;
+            if (firstOctet < 0) firstOctet = value;
+        }
+        return firstOctet > 0 && firstOctet < 224 && firstOctet != 127;
+    }
+
+    private boolean launchGame(int lanRole, String lanAddress, String localAddress) {
         if (launchPending || folderPending) return false;
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         String saved = prefs.getString(PREF_GAME_URI, null);
@@ -391,13 +520,16 @@ public final class MainActivity extends Activity {
                 + " render_rows=" + (rows == 0 ? "auto" : rows) + " fps_limit=" + targetFps);
 
         Intent game = new Intent();
-        game.setClassName(getPackageName(), getPackageName() + ".GameBootstrapActivity");
+        game.setClassName(getPackageName(), GameBootstrapActivity.class.getName());
         game.putExtra(GameBootstrapActivity.EXTRA_GAME_URI, saved);
         game.putExtra(GameBootstrapActivity.EXTRA_LANGUAGE, language);
         game.putExtra(GameBootstrapActivity.EXTRA_RENDER_ROWS, rows);
         game.putExtra(GameBootstrapActivity.EXTRA_TARGET_FPS, targetFps);
         game.putExtra(GameBootstrapActivity.EXTRA_SAVE_FOLDER, prefs.getString(PREF_SAVE_FOLDER, null));
         game.putExtra(GameBootstrapActivity.EXTRA_AUTO_HIDE_TOUCH, autoHideTouch.isChecked());
+        game.putExtra(GameBootstrapActivity.EXTRA_LAN_ROLE, lanRole);
+        if (lanAddress != null) game.putExtra(GameBootstrapActivity.EXTRA_LAN_ADDRESS, lanAddress);
+        if (localAddress != null) game.putExtra(GameBootstrapActivity.EXTRA_LAN_LOCAL_ADDRESS, localAddress);
         GraphicsSettings.putLaunchExtras(game, prefs);
         game.putExtra(DriverRuntime.EXTRA_DRIVER, prefs.getString(DriverStore.PREF_DRIVER, ""));
         game.setData(Uri.parse(saved));
